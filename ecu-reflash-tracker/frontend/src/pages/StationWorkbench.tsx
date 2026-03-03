@@ -2,11 +2,48 @@ import { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   getStations, listBoxes, claimBox, scanEcu,
-  freezeBox, startFlash, finishFlash, startRework, getBoxEcus,
+  freezeBox, startFlash, finishFlash, startRework, getBoxEcus, getBox, deleteEcu, markEcuScratch,
 } from '../services/api';
 import { useAuthStore, useWorkbenchStore, ECUContext, Station, Box } from '../store/index';
 import EcuDetailModal from '../components/EcuDetailModal';
+import ProfileModal, { AvatarCircle } from '../components/ProfileModal';
 
+/** Live elapsed-time display for an in-progress flash. */
+function FlashTimer({ startedAt }: { startedAt: string | null }) {
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    if (!startedAt) return;
+    const origin = new Date(startedAt + (startedAt.endsWith('Z') ? '' : 'Z')).getTime();
+    const tick = () => setElapsed(Math.max(0, Math.floor((Date.now() - origin) / 1000)));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [startedAt]);
+
+  if (!startedAt) return null;
+  const m = Math.floor(elapsed / 60).toString().padStart(2, '0');
+  const s = (elapsed % 60).toString().padStart(2, '0');
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 4,
+      fontVariantNumeric: 'tabular-nums',
+      fontSize: 12, color: '#a78bfa', fontWeight: 600,
+    }}>
+      <span style={{ fontSize: 11 }}>⏱</span>{m}:{s}
+    </span>
+  );
+}
+
+/** Format a finished duration (seconds) into a readable string. */
+function fmtDuration(secs: number | null | undefined): string {
+  if (secs == null) return '—';
+  const s = Math.round(secs);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return r === 0 ? `${m}m` : `${m}m ${r}s`;
+}
 type Phase = 'select-station' | 'scan-box' | 'learning' | 'flashing' | 'blocked' | 'completed';
 
 export default function StationWorkbench() {
@@ -21,11 +58,14 @@ export default function StationWorkbench() {
   const [boxScan, setBoxScan] = useState('');
   const [ecuScan, setEcuScan] = useState('');
   const [message, setMessage] = useState<{ text: string; ok: boolean }>({ text: '', ok: true });
+  const [showProfile, setShowProfile] = useState(false);
   const [flashResult, setFlashResult] = useState<Record<string, 'success' | 'failed'>>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [selectedEcu, setSelectedEcu] = useState<ECUContext | null>(null);
   const ecuInputRef = useRef<HTMLInputElement>(null);
   const msgTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Track boxes whose blocked-banner was dismissed so polling can't re-show it
+  const dismissedBlockedRef = useRef<string | null>(null);
 
   const notify = (text: string, ok = true) => {
     if (msgTimer.current) clearTimeout(msgTimer.current);
@@ -41,25 +81,47 @@ export default function StationWorkbench() {
     return fallback;
   };
 
-  useEffect(() => {
-    if (!sessionId) return;
-    Promise.all([getStations(sessionId), listBoxes(sessionId)]).then(([st, bx]) => {
-      setStations(st);
-      setAllBoxes(bx);
-    });
-    if (stationId && currentBox) {
-      determinePhase(currentBox);
-      getBoxEcus(sessionId, currentBox.id).then(setEcus);
-    }
-  }, [sessionId]);
-
   const determinePhase = (box: Box) => {
     if (box.status === 'completed') setPhase('completed');
-    else if (box.status === 'blocked') setPhase('blocked');
+    else if (box.status === 'blocked') {
+      // Only show the blocked banner once per box; if user dismissed it, go to flashing
+      if (dismissedBlockedRef.current === box.id) setPhase('flashing');
+      else setPhase('blocked');
+    }
     else if (box.inventory_frozen) setPhase('flashing');
     else if (box.status === 'learning' || box.status === 'in_progress') setPhase('learning');
     else setPhase('scan-box');
   };
+
+  const refreshWorkbench = async () => {
+    if (!sessionId) return;
+    const [st, bx] = await Promise.all([getStations(sessionId), listBoxes(sessionId)]);
+    setStations(st);
+    setAllBoxes(bx);
+    // Always read currentBox from Zustand store directly to avoid stale closure
+    const liveBox = useWorkbenchStore.getState().currentBox;
+    if (liveBox) {
+      const updated = bx.find((b: Box) => b.id === liveBox.id);
+      if (updated) {
+        setCurrentBox(updated);
+        determinePhase(updated);
+        getBoxEcus(sessionId, updated.id).then(setEcus);
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (!sessionId) return;
+    refreshWorkbench();
+    if (stationId && currentBox) {
+      determinePhase(currentBox);
+      getBoxEcus(sessionId, currentBox.id).then(setEcus);
+    }
+
+    const interval = setInterval(refreshWorkbench, 4000);
+    return () => clearInterval(interval);
+  }, [sessionId]);
+
 
   const handleSelectStation = async (sid: string) => {
     setStation(sid);
@@ -114,6 +176,19 @@ export default function StationWorkbench() {
       ecuInputRef.current?.focus();
     } catch (err: any) {
       notify(extractError(err, 'Error scanning ECU'), false);
+    }
+  };
+
+  const handleDeleteEcu = async (ecuId: string, ecuCode: string) => {
+    if (!sessionId || !currentBox) return;
+    if (!window.confirm(`Delete ECU "${ecuCode}"?\nOnly ECUs in 'learned' state can be deleted.`)) return;
+    try {
+      await deleteEcu(sessionId, currentBox.id, ecuId);
+      const ecuList = await getBoxEcus(sessionId, currentBox.id);
+      setEcus(ecuList);
+      notify(`✓ ECU ${ecuCode} removed`);
+    } catch (err: any) {
+      notify(extractError(err, 'Error deleting ECU'), false);
     }
   };
 
@@ -184,13 +259,30 @@ export default function StationWorkbench() {
       notify(extractError(err, 'Error'), false);
     }
   };
-
+  const handleMarkScratch = async (ecu: ECUContext) => {
+    if (!sessionId || !currentBox) return;
+    if (!window.confirm(`Mark ${ecu.ecu_code} as SCRATCH?\nThis excludes it from the count and allows closing the box even if it was not flashed correctly.`)) return;
+    try {
+      await markEcuScratch(sessionId, currentBox.id, ecu.id);
+      const [updatedBox, ecuList] = await Promise.all([
+        getBox(sessionId, currentBox.id),
+        getBoxEcus(sessionId, currentBox.id),
+      ]);
+      setCurrentBox(updatedBox);
+      setEcus(ecuList);
+      determinePhase(updatedBox);
+      notify(`\u{1f5d1}\ufe0f ${ecu.ecu_code} marcado como scratch`);
+    } catch (err: any) {
+      notify(extractError(err, 'Error marking scratch'), false);
+    }
+  };
   const STATUS_COLOR: Record<string, string> = {
     learned: 'var(--primary)',
     flashing: '#a78bfa',
     success: 'var(--success)',
     failed: 'var(--error)',
     rework_pending: 'var(--warn)',
+    scratch: '#6b7280',
   };
 
   const currentStationName = stations.find(s => s.id === stationId)?.name ?? stationId;
@@ -223,7 +315,21 @@ export default function StationWorkbench() {
             📦 {currentBox.box_serial}
           </span>
         )}
-        <span style={{ fontSize: 13, color: 'var(--text-dim)', marginRight: 8 }}>{user?.name}</span>
+        {user && (
+          <button
+            onClick={() => setShowProfile(true)}
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer',
+              display: 'flex', alignItems: 'center', gap: 8,
+              padding: '4px 8px', borderRadius: 8,
+              color: 'var(--text)', marginRight: 4,
+            }}
+            title="View profile"
+          >
+            <AvatarCircle user={user} size={28} />
+            <span style={{ fontSize: 13, color: 'var(--text-dim)' }}>{user.name}</span>
+          </button>
+        )}
         {message.text && (
           <span
             style={{
@@ -346,7 +452,7 @@ export default function StationWorkbench() {
             </form>
             <table className="table">
               <thead>
-                <tr><th>#</th><th>ECU Code</th><th>Status</th></tr>
+                <tr><th>#</th><th>ECU Code</th><th>Status</th><th></th></tr>
               </thead>
               <tbody>
                 {ecus.map((e, i) => (
@@ -355,17 +461,27 @@ export default function StationWorkbench() {
                     <td>
                       <code
                         style={{ cursor: 'pointer', color: 'var(--primary)', textDecoration: 'underline dotted' }}
-                        title="Ver detalles del ECU"
+                        title="View ECU details"
                         onClick={() => setSelectedEcu(e)}
                       >
                         {e.ecu_code}
                       </code>
                     </td>
                     <td><span className={`badge badge-${e.status}`}>{e.status}</span></td>
+                    <td>
+                      {e.status === 'learned' && (
+                        <button
+                          className="btn btn-danger"
+                          style={{ padding: '2px 8px', fontSize: 11 }}
+                          title="Delete ECU"
+                          onClick={() => handleDeleteEcu(e.id, e.ecu_code)}
+                        >✕</button>
+                      )}
+                    </td>
                   </tr>
                 ))}
                 {ecus.length === 0 && (
-                  <tr><td colSpan={3} style={{ color: 'var(--text-dim)', textAlign: 'center', padding: 24 }}>Scan ECUs to begin</td></tr>
+                  <tr><td colSpan={4} style={{ color: 'var(--text-dim)', textAlign: 'center', padding: 24 }}>Scan ECUs to begin</td></tr>
                 )}
               </tbody>
             </table>
@@ -388,7 +504,7 @@ export default function StationWorkbench() {
               <thead>
                 <tr>
                   <th>ECU Code</th>
-                  <th>Status</th>
+                  <th>Status / Time</th>
                   <th>Attempts</th>
                   <th>Result</th>
                   <th>Notes</th>
@@ -401,7 +517,7 @@ export default function StationWorkbench() {
                     <td>
                       <code
                         style={{ fontSize: 13, cursor: 'pointer', color: 'var(--primary)', textDecoration: 'underline dotted' }}
-                        title="Ver detalles del ECU"
+                        title="View ECU details"
                         onClick={() => setSelectedEcu(e)}
                       >
                         {e.ecu_code}
@@ -415,6 +531,19 @@ export default function StationWorkbench() {
                         />
                         <span className={`badge badge-${e.status}`}>{e.status}</span>
                       </span>
+                      {/* Live timer while flashing */}
+                      {e.status === 'flashing' && (
+                        <div style={{ marginTop: 4 }}>
+                          <FlashTimer startedAt={e.current_attempt_started_at} />
+                        </div>
+                      )}
+                      {/* Final duration once measured */}
+                      {(e.status === 'success' || e.status === 'failed' || e.status === 'rework_pending' || e.status === 'scratch') &&
+                        e.last_attempt_duration_seconds != null && (
+                        <div style={{ marginTop: 3, fontSize: 11, color: e.status === 'success' ? 'var(--success)' : e.status === 'failed' ? 'var(--error)' : e.status === 'scratch' ? '#6b7280' : 'var(--warn)', fontWeight: 600 }}>
+                          ⏱ {fmtDuration(e.last_attempt_duration_seconds)}
+                        </div>
+                      )}
                     </td>
                     <td style={{ color: 'var(--text-dim)' }}>{e.attempts}</td>
                     <td>
@@ -448,13 +577,13 @@ export default function StationWorkbench() {
                       )}
                     </td>
                     <td>
-                      {(e.status === 'learned' || e.status === 'rework_pending') && (
+                      {e.status === 'learned' && (
                         <button
                           className="btn btn-primary"
                           style={{ padding: '4px 12px', fontSize: 12 }}
                           onClick={() => handleStartFlash(e)}
                         >
-                          {e.status === 'rework_pending' ? 'Re-Flash' : 'Start Flash'}
+                          Start Flash
                         </button>
                       )}
                       {e.status === 'flashing' && (
@@ -467,13 +596,42 @@ export default function StationWorkbench() {
                         </button>
                       )}
                       {e.status === 'failed' && (
-                        <button
-                          className="btn btn-warn"
-                          style={{ padding: '4px 12px', fontSize: 12 }}
-                          onClick={() => handleRework(e)}
-                        >
-                          Rework
-                        </button>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                          <button
+                            className="btn btn-warn"
+                            style={{ padding: '4px 12px', fontSize: 12 }}
+                            onClick={() => handleRework(e)}
+                          >
+                            Rework
+                          </button>
+                          <button
+                            className="btn btn-ghost"
+                            style={{ padding: '4px 10px', fontSize: 12, color: '#6b7280', border: '1px solid #6b7280' }}
+                            title="Mark as damaged part (scratch) — excluded from count and allows box to be closed"
+                            onClick={() => handleMarkScratch(e)}
+                          >
+                            🗑 Scratch
+                          </button>
+                        </div>
+                      )}
+                      {e.status === 'rework_pending' && (
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                          <button
+                            className="btn btn-primary"
+                            style={{ padding: '4px 12px', fontSize: 12 }}
+                            onClick={() => handleStartFlash(e)}
+                          >
+                            Re-Flash
+                          </button>
+                          <button
+                            className="btn btn-ghost"
+                            style={{ padding: '4px 10px', fontSize: 12, color: '#6b7280', border: '1px solid #6b7280' }}
+                            title="Mark as damaged part (scratch) — excluded from count and allows box to be closed"
+                            onClick={() => handleMarkScratch(e)}
+                          >
+                            🗑 Scratch
+                          </button>
+                        </div>
                       )}
                     </td>
                   </tr>
@@ -491,7 +649,10 @@ export default function StationWorkbench() {
             <p style={{ color: 'var(--text-dim)', marginTop: 8 }}>
               {currentBox.box_serial} — one or more ECUs failed. Rework failed units to unblock.
             </p>
-            <button className="btn btn-warn" style={{ marginTop: 20 }} onClick={() => setPhase('flashing')}>
+            <button className="btn btn-warn" style={{ marginTop: 20 }} onClick={() => {
+              dismissedBlockedRef.current = currentBox.id;
+              setPhase('flashing');
+            }}>
               View Flash Table
             </button>
           </div>
@@ -522,6 +683,9 @@ export default function StationWorkbench() {
           ecu={selectedEcu}
           onClose={() => setSelectedEcu(null)}
         />
+      )}
+      {showProfile && (
+        <ProfileModal onClose={() => setShowProfile(false)} />
       )}
     </>
   );

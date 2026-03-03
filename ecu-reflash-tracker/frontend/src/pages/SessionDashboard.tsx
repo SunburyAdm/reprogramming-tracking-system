@@ -3,6 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import { listSessions, createSession, deleteSession } from '../services/api';
 import { useAuthStore, useSessionStore, Session } from '../store/index';
 import { format } from 'date-fns';
+import UserManagementModal from '../components/UserManagementModal';
+import ProfileModal, { AvatarCircle } from '../components/ProfileModal';
+import { useT } from '../i18n';
 
 export default function SessionDashboard() {
   const navigate = useNavigate();
@@ -12,6 +15,18 @@ export default function SessionDashboard() {
   const [name, setName] = useState('');
   const [swVersion, setSwVersion] = useState('');
   const [creating, setCreating] = useState(false);
+  const [templates, setTemplates] = useState<Array<{ id: string; label: string; name: string; target_sw_version: string }>>([]);
+  const [showUserMgmt, setShowUserMgmt] = useState(false);
+  const [showProfile, setShowProfile] = useState(false);
+  const t = useT();
+  const loadTemplates = () =>
+    setTemplates(JSON.parse(localStorage.getItem('ecu-session-templates') || '[]'));
+
+  const deleteTemplate = (id: string) => {
+    const updated = templates.filter((t: { id: string }) => t.id !== id);
+    localStorage.setItem('ecu-session-templates', JSON.stringify(updated));
+    setTemplates(updated);
+  };
 
   const load = async () => {
     try {
@@ -20,7 +35,7 @@ export default function SessionDashboard() {
     } catch {}
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); loadTemplates(); }, []);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -38,7 +53,7 @@ export default function SessionDashboard() {
 
   const handleDelete = async (e: React.MouseEvent, sessionId: string, sessionName: string) => {
     e.stopPropagation();
-    if (!window.confirm(`¿Eliminar la sesión "${sessionName}"?\nSe borrarán también todas las cajas, ECUs y datos asociados.`)) return;
+    if (!window.confirm(`Delete session "${sessionName}"?\nAll boxes, ECUs and associated data will also be deleted.`)) return;
     await deleteSession(sessionId);
     load();
   };
@@ -49,31 +64,61 @@ export default function SessionDashboard() {
         <span className="navbar-brand">⚡ ECU Reflash</span>
         <span className="navbar-link">Sessions</span>
         <span className="navbar-spacer" />
-        <span style={{ fontSize: 13, color: 'var(--text-dim)', marginRight: 12 }}>{user?.name}</span>
+        {user && (
+          <button
+            onClick={() => setShowProfile(true)}
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer',
+              display: 'flex', alignItems: 'center', gap: 8,
+              padding: '4px 8px', borderRadius: 8,
+              color: 'var(--text)',
+            }}
+            title="View profile"
+          >
+            <AvatarCircle user={user} size={28} />
+            <span style={{ fontSize: 13, color: 'var(--text-dim)' }}>{user.name}</span>
+          </button>
+        )}
+        {user?.role === 'admin' && (
+          <button
+            className="btn btn-ghost"
+            style={{ padding: '6px 12px', fontSize: 13, marginRight: 6 }}
+            onClick={() => setShowUserMgmt(true)}
+          >
+            👤 {t.users}
+          </button>
+        )}
         <button
           className="btn btn-ghost"
           style={{ padding: '6px 12px', fontSize: 13 }}
           onClick={() => { logout(); navigate('/login'); }}
         >
-          Logout
+          {t.logout}
         </button>
       </nav>
 
+      {showUserMgmt && user && (
+        <UserManagementModal currentUserId={user.id} onClose={() => setShowUserMgmt(false)} />
+      )}
+      {showProfile && (
+        <ProfileModal onClose={() => setShowProfile(false)} />
+      )}
+
       <div className="page">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-          <h1 style={{ fontSize: 22, fontWeight: 700 }}>Flash Sessions</h1>
+          <h1 style={{ fontSize: 22, fontWeight: 700 }}>{t.flashSessions}</h1>
           {user?.role === 'admin' && (
-            <button className="btn btn-primary" onClick={() => setShowCreate(true)}>+ New Session</button>
+            <button className="btn btn-primary" onClick={() => setShowCreate(true)}>{t.newSession}</button>
           )}
         </div>
 
         <table className="table">
           <thead>
             <tr>
-              <th>Name</th>
-              <th>SW Version</th>
-              <th>Status</th>
-              <th>Created</th>
+              <th>{t.colName}</th>
+              <th>{t.colSwVersion}</th>
+              <th>{t.colStatus}</th>
+              <th>{t.colCreated}</th>
               <th></th>
             </tr>
           </thead>
@@ -88,14 +133,14 @@ export default function SessionDashboard() {
                 </td>
                 <td>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                    <span style={{ color: 'var(--primary)', fontSize: 13 }}>Open →</span>
+                    <span style={{ color: 'var(--primary)', fontSize: 13 }}>{t.openSession}</span>
                     {user?.role === 'admin' && (
                       <button
                         className="btn btn-danger"
                         style={{ padding: '3px 10px', fontSize: 12 }}
                         onClick={e => handleDelete(e, s.id, s.name)}
                       >
-                        Borrar
+                        {t.deleteSession}
                       </button>
                     )}
                   </div>
@@ -116,10 +161,38 @@ export default function SessionDashboard() {
       {showCreate && (
         <div className="modal-overlay" onClick={() => setShowCreate(false)}>
           <div className="modal" onClick={e => e.stopPropagation()}>
-            <h2>New Flash Session</h2>
+            <h2>{t.newFlashSession}</h2>
+
+            {templates.length > 0 && (
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 8 }}>{t.savedTemplates}</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {templates.map(t => (
+                    <div key={t.id} style={{ display: 'flex', alignItems: 'center', background: 'var(--surface2)', borderRadius: 6, border: '1px solid var(--border)', overflow: 'hidden' }}>
+                      <button
+                        type="button"
+                        style={{ background: 'none', border: 'none', color: 'var(--primary)', padding: '5px 10px', cursor: 'pointer', fontSize: 13, fontWeight: 500 }}
+                        onClick={() => { setName(t.name); setSwVersion(t.target_sw_version); }}
+                      >
+                        {t.label}
+                      </button>
+                      <button
+                        type="button"
+                        style={{ background: 'none', border: 'none', color: 'var(--text-dim)', padding: '5px 8px', cursor: 'pointer', fontSize: 12 }}
+                        onClick={() => deleteTemplate(t.id)}
+                        title="Delete template"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <form onSubmit={handleCreate}>
               <div className="form-group">
-                <label>Session Name</label>
+                <label>{t.sessionName}</label>
                 <input
                   value={name}
                   onChange={e => setName(e.target.value)}
@@ -129,7 +202,7 @@ export default function SessionDashboard() {
                 />
               </div>
               <div className="form-group">
-                <label>Target SW Version</label>
+                <label>{t.targetSwVersion}</label>
                 <input
                   value={swVersion}
                   onChange={e => setSwVersion(e.target.value)}
@@ -138,9 +211,9 @@ export default function SessionDashboard() {
                 />
               </div>
               <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 20 }}>
-                <button type="button" className="btn btn-ghost" onClick={() => setShowCreate(false)}>Cancel</button>
+                <button type="button" className="btn btn-ghost" onClick={() => setShowCreate(false)}>{t.cancel}</button>
                 <button type="submit" className="btn btn-primary" disabled={creating}>
-                  {creating ? 'Creating…' : 'Create'}
+                  {creating ? t.creating : t.create}
                 </button>
               </div>
             </form>

@@ -74,12 +74,13 @@ class AnalyticsService:
         total_ecus = len(all_ecus)
         success_ecus = sum(1 for e in all_ecus if e.status == "success")
         failed_ecus = sum(1 for e in all_ecus if e.status == "failed")
+        scratch_ecus = sum(1 for e in all_ecus if e.status == "scratch")
         flashing_ecus = sum(1 for e in all_ecus if e.status == "flashing")
         rework_pending_ecus = sum(1 for e in all_ecus if e.status == "rework_pending")
         learned_ecus = sum(1 for e in all_ecus if e.status == "learned")
 
         overall_failure_rate = (
-            round((failed_ecus / total_ecus) * 100.0, 2) if total_ecus > 0 else 0.0
+            round((failed_ecus + scratch_ecus) / total_ecus, 4) if total_ecus > 0 else 0.0
         )
 
         # ----- flash attempts ----------------------------------------------
@@ -122,6 +123,7 @@ class AnalyticsService:
             b_total = len(box_ecus)
             b_success = sum(1 for e in box_ecus if e.status == "success")
             b_failed = sum(1 for e in box_ecus if e.status == "failed")
+            b_scratch = sum(1 for e in box_ecus if e.status == "scratch")
             b_rework = sum(1 for e in box_ecus if e.status == "rework_pending")
             b_flashing = sum(1 for e in box_ecus if e.status == "flashing")
             b_learned = sum(1 for e in box_ecus if e.status == "learned")
@@ -137,7 +139,7 @@ class AnalyticsService:
             b_total_time = sum(b_times)
 
             b_fail_rate = (
-                round((b_failed / b_total) * 100.0, 2) if b_total > 0 else 0.0
+                round((b_failed + b_scratch) / b_total, 4) if b_total > 0 else 0.0
             )
 
             # Count total attempts across all ECUs in this box
@@ -170,6 +172,7 @@ class AnalyticsService:
                 "total_ecus": b_total,
                 "success_ecus": b_success,
                 "failed_ecus": b_failed,
+                "scratch_ecus": b_scratch,
                 "rework_pending_ecus": b_rework,
                 "flashing_ecus": b_flashing,
                 "learned_ecus": b_learned,
@@ -184,24 +187,27 @@ class AnalyticsService:
                 "failed_attempts": b_failed_attempts,
                 # Rates
                 "failure_rate": b_fail_rate,
-                "completion_rate": round((b_success / b_total) * 100.0, 2) if b_total > 0 else 0.0,
+                "completion_rate": round(b_success / b_total, 4) if b_total > 0 else 0.0,
             }
             boxes_kpi.append(box_kpi)
 
-        # ----- station timeline (flash duration over time per station) ----
-        station_timeline: Dict[str, List[Dict[str, Any]]] = {}
-        for a in sorted(all_attempts, key=lambda x: x.ended_at or datetime.min):
-            if (
-                a.result in ("success", "failed")
-                and a.ended_at is not None
-                and a.duration_seconds is not None
-            ):
+        # ----- station ECUs-per-hour (successful flashes bucketed by hour) ----
+        station_hourly: Dict[str, Dict[str, int]] = {}
+        for a in all_attempts:
+            if a.result == "success" and a.ended_at is not None:
                 sname = station_map.get(a.station_id, "Unknown") if a.station_id else "Unknown"
-                station_timeline.setdefault(sname, []).append({
-                    "time": a.ended_at.isoformat(),
-                    "duration": round(a.duration_seconds, 1),
-                    "result": a.result,
-                })
+                hour_bucket = a.ended_at.replace(minute=0, second=0, microsecond=0).isoformat()
+                station_hourly.setdefault(sname, {}).setdefault(hour_bucket, 0)
+                station_hourly[sname][hour_bucket] += 1
+
+        # Convert to sorted list of {hour, count} per station
+        station_timeline: Dict[str, List[Dict[str, Any]]] = {
+            sname: sorted(
+                [{"hour": h, "count": c} for h, c in buckets.items()],
+                key=lambda x: x["hour"]
+            )
+            for sname, buckets in station_hourly.items()
+        }
 
         # ----- assemble result dict ---------------------------------------
         return {
@@ -222,13 +228,14 @@ class AnalyticsService:
             "total_ecus": total_ecus,
             "success_ecus": success_ecus,
             "failed_ecus": failed_ecus,
+            "scratch_ecus": scratch_ecus,
             "flashing_ecus": flashing_ecus,
             "rework_pending_ecus": rework_pending_ecus,
             "learned_ecus": learned_ecus,
             # Rates
             "overall_failure_rate": overall_failure_rate,
             "overall_completion_rate": (
-                round((success_ecus / total_ecus) * 100.0, 2) if total_ecus > 0 else 0.0
+                round(success_ecus / total_ecus, 4) if total_ecus > 0 else 0.0
             ),
             # Flash attempt aggregates
             "total_flash_attempts": total_flash_attempts,

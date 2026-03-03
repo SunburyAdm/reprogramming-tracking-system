@@ -299,10 +299,127 @@ class BoxService:
 
         statuses = [e.status for e in ecus]
 
-        if any(s == "failed" for s in statuses):
+        # scratch ECUs are treated as resolved (won't block the box)
+        active_statuses = [s for s in statuses if s != "scratch"]
+
+        if any(s == "failed" for s in active_statuses):
             box.status = "blocked"
-        elif all(s == "success" for s in statuses):
+        elif all(s in ("success", "scratch") for s in statuses):
             box.status = "completed"
             box.completed_at = datetime.utcnow()
 
         await db.flush()
+
+    VALID_STATUSES = {"pending", "learning", "in_progress", "blocked", "completed"}
+
+    @staticmethod
+    async def mark_ecu_scratch(
+        db: AsyncSession,
+        session_id: UUID,
+        box_id: UUID,
+        ecu_context_id: UUID,
+        user: User,
+    ) -> SessionBoxECU:
+        result = await db.execute(
+            select(SessionBoxECU).where(
+                SessionBoxECU.id == ecu_context_id,
+                SessionBoxECU.box_id == box_id,
+                SessionBoxECU.session_id == session_id,
+            )
+        )
+        ecu = result.scalar_one_or_none()
+        if not ecu:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ECU not found")
+        if ecu.status not in ("failed", "rework_pending"):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Only ECUs with status 'failed' or 'rework_pending' can be marked as scratch (current: '{ecu.status}').",
+            )
+        ecu.status = "scratch"
+        ecu.current_attempt_started_at = None
+        hist = History(
+            session_id=session_id,
+            box_id=box_id,
+            ecu_context_id=ecu_context_id,
+            user_id=user.id,
+            action="ECU_SCRATCH",
+            data={"ecu_code": ecu.ecu_code, "marked_by": str(user.id)},
+        )
+        db.add(hist)
+        await db.flush()
+        await BoxService._check_box_completion(db, box_id)
+        return ecu
+
+    @staticmethod
+    async def delete_ecu(
+        db: AsyncSession,
+        session_id: UUID,
+        box_id: UUID,
+        ecu_context_id: UUID,
+        user: User,
+    ) -> None:
+        result = await db.execute(
+            select(SessionBoxECU).where(
+                SessionBoxECU.id == ecu_context_id,
+                SessionBoxECU.box_id == box_id,
+                SessionBoxECU.session_id == session_id,
+            )
+        )
+        ecu = result.scalar_one_or_none()
+        if not ecu:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ECU not found")
+        if ecu.status not in ("learned",):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Cannot delete ECU with status '{ecu.status}'. Only 'learned' ECUs can be removed.",
+            )
+        # Check box is not frozen
+        box_result = await db.execute(select(Box).where(Box.id == box_id))
+        box = box_result.scalar_one_or_none()
+        if box and box.inventory_frozen:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Cannot delete ECU from a frozen box",
+            )
+        # Decrement learned_count
+        if box and box.learned_count and box.learned_count > 0:
+            box.learned_count -= 1
+        # Write history — ecu_context_id intentionally None so it survives the cascade delete
+        hist = History(
+            session_id=session_id,
+            box_id=box_id,
+            ecu_context_id=None,
+            user_id=user.id,
+            action="ECU_REMOVED",
+            data={"ecu_code": ecu.ecu_code, "removed_by": str(user.id)},
+        )
+        db.add(hist)
+        await db.delete(ecu)
+        await db.flush()
+
+    @staticmethod
+    async def update_box_status(
+        db: AsyncSession,
+        session_id: UUID,
+        box_id: UUID,
+        new_status: str,
+        user: User,
+    ) -> Box:
+        if new_status not in BoxService.VALID_STATUSES:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid status '{new_status}'. Must be one of: {sorted(BoxService.VALID_STATUSES)}",
+            )
+        result = await db.execute(
+            select(Box).where(Box.id == box_id, Box.session_id == session_id)
+        )
+        box = result.scalar_one_or_none()
+        if not box:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Box not found")
+        box.status = new_status
+        if new_status == "completed" and box.completed_at is None:
+            box.completed_at = datetime.utcnow()
+        elif new_status != "completed":
+            box.completed_at = None
+        await db.flush()
+        return box

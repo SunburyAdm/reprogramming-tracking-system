@@ -5,7 +5,10 @@ export interface User {
   id: string;
   email: string;
   name: string;
-  role: 'admin' | 'tech';
+  role: 'admin' | 'tech' | 'viewer';
+  avatar?: string;
+  avatar_color?: string;
+  created_at?: string;
 }
 
 export interface Station {
@@ -31,7 +34,7 @@ export interface ECUContext {
   session_id: string;
   box_id: string;
   ecu_code: string;
-  status: 'learned' | 'flashing' | 'success' | 'failed' | 'rework_pending';
+  status: 'learned' | 'flashing' | 'success' | 'failed' | 'rework_pending' | 'scratch';
   attempts: number;
   last_station_id?: string;
   last_user_id?: string;
@@ -49,14 +52,19 @@ export interface Box {
   inventory_frozen: boolean;
   status: 'pending' | 'learning' | 'in_progress' | 'blocked' | 'completed';
   assigned_station_id?: string;
+  assigned_station_name?: string;
+  failed_count: number;
+  scratch_count: number;
   frozen_at?: string;
   completed_at?: string;
+  created_at?: string;
 }
 
 interface AuthState {
   user: User | null;
   token: string | null;
   setAuth: (token: string, user: User) => void;
+  setUser: (user: User) => void;
   logout: () => void;
   fetchMe: () => Promise<void>;
 }
@@ -68,6 +76,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     localStorage.setItem('token', token);
     set({ token, user });
   },
+  setUser: (user) => set({ user }),
   logout: () => {
     localStorage.removeItem('token');
     set({ token: null, user: null });

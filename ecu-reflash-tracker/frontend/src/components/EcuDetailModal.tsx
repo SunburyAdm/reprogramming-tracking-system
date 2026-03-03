@@ -166,12 +166,12 @@ export default function EcuDetailModal({ sessionId, ecu, onClose }: Props) {
               {/* ECU meta */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 }}>
                 {[
-                  { label: 'Código ECU', value: ecu.ecu_code },
+                  { label: 'ECU Code', value: ecu.ecu_code },
                   { label: 'Estado', value: ecu.status },
-                  { label: 'Versión', value: ecu.version },
+                  { label: 'Version', value: ecu.version },
                   { label: 'Total intentos', value: ecu.attempts },
                   { label: 'Tiempo total', value: `${Math.round(ecu.total_time_seconds)}s` },
-                  { label: 'Último intento', value: ecu.last_attempt_duration_seconds != null ? `${ecu.last_attempt_duration_seconds.toFixed(1)}s` : '—' },
+                  { label: 'Last attempt', value: ecu.last_attempt_duration_seconds != null ? `${ecu.last_attempt_duration_seconds.toFixed(1)}s` : '—' },
                   { label: 'Creado', value: fmtTime(ecu.created_at) },
                   { label: 'Actualizado', value: fmtTime(ecu.updated_at) },
                 ].map(({ label, value }) => (
@@ -193,7 +193,7 @@ export default function EcuDetailModal({ sessionId, ecu, onClose }: Props) {
                       <th>#</th>
                       <th>Inicio</th>
                       <th>Fin</th>
-                      <th>Duración</th>
+                      <th>Duration</th>
                       <th>Resultado</th>
                       <th>Notas</th>
                     </tr>
@@ -251,7 +251,7 @@ export default function EcuDetailModal({ sessionId, ecu, onClose }: Props) {
                   <tr>
                     <th>Archivo</th>
                     <th>Tipo</th>
-                    <th>Tamaño</th>
+                    <th>Size</th>
                     <th>Notas</th>
                     <th>Subido</th>
                   </tr>

@@ -1,25 +1,39 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   getSession, listBoxes, createBox,
   sessionReady, sessionStart, sessionClose, reopenSession,
   getAnalytics, downloadSessionReport,
   getStations, createStation, getUsers,
-  deleteBox,
+  deleteBox, updateBoxStatus,
 } from '../services/api';
-import { useAuthStore, useSessionStore, Box } from '../store/index';
+import { useAuthStore, useSessionStore, useWorkbenchStore, Box } from '../store/index';
 import { format } from 'date-fns';
 import BoxDetailDrawer from '../components/BoxDetailDrawer';
 import AnalyticsTab from '../components/AnalyticsTab';
+import StationDetailModal from '../components/StationDetailModal';
+import BoxKanban from '../components/BoxKanban';
+import ProfileModal, { AvatarCircle } from '../components/ProfileModal';
 
 export default function SessionDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { user, logout } = useAuthStore();
   const { setCurrentSession } = useSessionStore();
+  const { setStation } = useWorkbenchStore();
   const [session, setSession] = useState<any>(null);
+  const [showSaveTemplate, setShowSaveTemplate] = useState(false);
+  const [showProfile, setShowProfile] = useState(false);
+  const [templateLabel, setTemplateLabel] = useState('');
   const [boxes, setBoxes] = useState<Box[]>([]);
   const [tab, setTab] = useState<'boxes' | 'stations' | 'analytics'>('boxes');
+  const [boxView, setBoxView] = useState<'kanban' | 'grid'>('kanban');
+  const [boxSearch, setBoxSearch] = useState('');
+  const [boxStatusFilter, setBoxStatusFilter] = useState<string>('all');
+  const [boxStationFilter, setBoxStationFilter] = useState<string>('all');
+  const [boxHasIssues, setBoxHasIssues] = useState(false);
+  const [boxSort, setBoxSort] = useState<'serial' | 'created' | 'completed' | 'ecus' | 'issues'>('serial');
+  const [boxSortDir, setBoxSortDir] = useState<'asc' | 'desc'>('asc');
   const [analytics, setAnalytics] = useState<any>(null);
   const [selectedBox, setSelectedBox] = useState<Box | null>(null);
   // Add box modal
@@ -32,6 +46,10 @@ export default function SessionDetail() {
   const [stations, setStations] = useState<any[]>([]);
   const [allUsers, setAllUsers] = useState<any[]>([]);
   const [selectedMembers, setSelectedMembers] = useState<string[]>([]);
+  const [selectedStation, setSelectedStation] = useState<any | null>(null);
+  const [stationPresets] = useState<any[]>(() =>
+    JSON.parse(localStorage.getItem('ecu-station-presets') || '[]')
+  );
 
   const load = async () => {
     if (!id) return;
@@ -47,7 +65,22 @@ export default function SessionDetail() {
     try { setAnalytics(await getAnalytics(id)); } catch {}
   };
 
-  useEffect(() => { load(); getUsers().then(setAllUsers); }, [id]);
+  // Initial load + background polling every 5 s
+  const tabRef = useRef(tab);
+  useEffect(() => { tabRef.current = tab; }, [tab]);
+
+  useEffect(() => {
+    load();
+    getUsers().then(setAllUsers);
+
+    const interval = setInterval(() => {
+      load();
+      if (tabRef.current === 'analytics') loadAnalytics();
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [id]);
+
   useEffect(() => { if (tab === 'analytics') loadAnalytics(); }, [tab]);
 
   const handleTransition = async (fn: () => Promise<any>) => {
@@ -87,23 +120,48 @@ export default function SessionDetail() {
   const handleDeleteBox = async (e: React.MouseEvent, boxId: string, boxSerial: string) => {
     e.stopPropagation();
     if (!id) return;
-    if (!window.confirm(`¿Eliminar la caja "${boxSerial}"?\nSe borrarán también todos sus ECUs y registros.`)) return;
+    if (!window.confirm(`Delete box "${boxSerial}"?\nAll its ECUs and records will also be deleted.`)) return;
     await deleteBox(id, boxId);
     load();
+  };
+
+  const handleBoxStatusChange = async (boxId: string, newStatus: string) => {
+    if (!id) return;
+    try { await updateBoxStatus(id, boxId, newStatus); load(); } catch {}
+  };
+
+  const handleGoToStation = (stationId: string) => {
+    setStation(stationId);
+    navigate(`/sessions/${id}/workbench`);
+  };
+
+  const handleStationUpdated = (updated: any) => {
+    setStations((prev: any[]) => prev.map((s: any) => s.id === updated.id ? updated : s));
+    setSelectedStation(updated);
+  };
+
+  const handleSaveTemplate = () => {
+    if (!session || !templateLabel.trim()) return;
+    const templates = JSON.parse(localStorage.getItem('ecu-session-templates') || '[]');
+    const tpl = { id: Date.now().toString(), label: templateLabel.trim(), name: session.name, target_sw_version: session.target_sw_version };
+    localStorage.setItem('ecu-session-templates', JSON.stringify([tpl, ...templates.filter((t: any) => t.label !== tpl.label)]));
+    setShowSaveTemplate(false);
+    setTemplateLabel('');
+    alert(`Template "${tpl.label}" saved.`);
   };
 
   const handleReopen = async () => {
     if (!id) return;
     if (!window.confirm(
-      '⚠️ CASO ESPECIAL — Reabrir Sesión\n\n' +
-      'Esta acción revierte una sesión completada/archivada al estado activo.\n' +
-      '¿Confirmar reapertura? (Solo para casos autorizados por administración.)'
+      '⚠️ SPECIAL CASE — Reopen Session\n\n' +
+      'This action reverts a completed/archived session back to active status.\n' +
+      'Confirm reopening? (Only for cases authorized by administration.)'
     )) return;
     try {
       await reopenSession(id);
       load();
     } catch (err: any) {
-      alert('Error al reabrir la sesión: ' + (err?.response?.data?.detail ?? err.message));
+      alert('Error reopening session: ' + (err?.response?.data?.detail ?? err.message));
     }
   };
 
@@ -131,7 +189,22 @@ export default function SessionDetail() {
         <span style={{ color: 'var(--text-dim)' }}>/</span>
         <span style={{ fontSize: 14, fontWeight: 500 }}>{session.name}</span>
         <span className="navbar-spacer" />
-        <span style={{ fontSize: 13, color: 'var(--text-dim)', marginRight: 12 }}>{user?.name}</span>
+        {user && (
+          <button
+            onClick={() => setShowProfile(true)}
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer',
+              display: 'flex', alignItems: 'center', gap: 8,
+              padding: '4px 8px', borderRadius: 8,
+              color: 'var(--text)',
+              marginRight: 8,
+            }}
+            title="View profile"
+          >
+            <AvatarCircle user={user} size={28} />
+            <span style={{ fontSize: 13, color: 'var(--text-dim)' }}>{user.name}</span>
+          </button>
+        )}
         <button
           className="btn btn-ghost"
           style={{ padding: '6px 12px', fontSize: 13, marginRight: 8 }}
@@ -182,9 +255,16 @@ export default function SessionDetail() {
               )}
               {(session.status === 'completed' || session.status === 'archived') && (
                 <button className="btn btn-danger" onClick={handleReopen}>
-                  ⚠️ Reabrir Sesión
+                  ⚠️ Reopen Session
                 </button>
               )}
+              <button
+                className="btn btn-ghost"
+                style={{ padding: '6px 12px', fontSize: 13 }}
+                onClick={() => { setTemplateLabel(session.name); setShowSaveTemplate(true); }}
+              >
+                📋 Save Template
+              </button>
             </div>
           )}
         </div>
@@ -212,20 +292,141 @@ export default function SessionDetail() {
 
         {tab === 'boxes' && (
           <>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
+            {/* Search + filter bar */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+              <input
+                type="text"
+                placeholder="Search box…"
+                value={boxSearch}
+                onChange={e => setBoxSearch(e.target.value)}
+                style={{
+                  background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 7,
+                  color: 'var(--text)', padding: '5px 12px', fontSize: 13, width: 180,
+                }}
+              />
+              {(['all','pending','learning','in_progress','blocked','completed'] as const).map(s => (
+                <button
+                  key={s}
+                  onClick={() => setBoxStatusFilter(s)}
+                  style={{
+                    padding: '4px 10px', fontSize: 12, fontWeight: 600, border: 'none', borderRadius: 5,
+                    cursor: 'pointer', transition: 'all .15s',
+                    background: boxStatusFilter === s ? 'var(--primary)' : 'var(--surface2)',
+                    color: boxStatusFilter === s ? '#fff' : 'var(--text-dim)',
+                  }}
+                >{s === 'all' ? 'All' : s === 'in_progress' ? 'In progress' : s.charAt(0).toUpperCase() + s.slice(1)}</button>
+              ))}
+              <button
+                onClick={() => setBoxHasIssues(v => !v)}
+                style={{
+                  padding: '4px 10px', fontSize: 12, fontWeight: 600, border: 'none', borderRadius: 5,
+                  cursor: 'pointer', transition: 'all .15s',
+                  background: boxHasIssues ? '#ef4444' : 'var(--surface2)',
+                  color: boxHasIssues ? '#fff' : 'var(--text-dim)',
+                }}
+              >⚠ With issues</button>
+              <select
+                value={boxStationFilter}
+                onChange={e => setBoxStationFilter(e.target.value)}
+                style={{
+                  background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 7,
+                  color: boxStationFilter !== 'all' ? 'var(--primary)' : 'var(--text-dim)',
+                  padding: '4px 10px', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                }}
+              >
+                <option value="all">All stations</option>
+                <option value="__none__">No station</option>
+                {stations.map((s: any) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+              <select
+                value={boxSort}
+                onChange={e => setBoxSort(e.target.value as any)}
+                style={{
+                  background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 7,
+                  color: 'var(--text-dim)', padding: '4px 10px', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                }}
+              >
+                <option value="serial">Sort: Name</option>
+                <option value="created">Sort: Created</option>
+                <option value="completed">Sort: Completed</option>
+                <option value="ecus">Sort: ECUs</option>
+                <option value="issues">Sort: Issues</option>
+              </select>
+              <button
+                onClick={() => setBoxSortDir(d => d === 'asc' ? 'desc' : 'asc')}
+                title={boxSortDir === 'asc' ? 'Ascendente' : 'Descendente'}
+                style={{
+                  background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 7,
+                  color: 'var(--text-dim)', padding: '4px 9px', fontSize: 14, cursor: 'pointer', lineHeight: 1,
+                }}
+              >{boxSortDir === 'asc' ? '↑' : '↓'}</button>
+              <span style={{ flex: 1 }} />
+              {/* View toggle */}
+              <div style={{ display: 'flex', background: 'var(--surface2)', borderRadius: 7, padding: 3, gap: 2 }}>
+                <button
+                  onClick={() => setBoxView('kanban')}
+                  style={{
+                    padding: '4px 12px', fontSize: 12, fontWeight: 600, border: 'none', borderRadius: 5, cursor: 'pointer',
+                    background: boxView === 'kanban' ? 'var(--primary)' : 'transparent',
+                    color: boxView === 'kanban' ? '#fff' : 'var(--text-dim)',
+                    transition: 'all .15s',
+                  }}
+                >⬜ Kanban</button>
+                <button
+                  onClick={() => setBoxView('grid')}
+                  style={{
+                    padding: '4px 12px', fontSize: 12, fontWeight: 600, border: 'none', borderRadius: 5, cursor: 'pointer',
+                    background: boxView === 'grid' ? 'var(--primary)' : 'transparent',
+                    color: boxView === 'grid' ? '#fff' : 'var(--text-dim)',
+                    transition: 'all .15s',
+                  }}
+                >▦ Grid</button>
+              </div>
               {session.status === 'active' && user?.role === 'admin' && (
                 <button className="btn btn-primary" onClick={() => setShowAddBox(true)}>+ Add Box</button>
               )}
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
-              {boxes.map((b: Box) => (
+
+            {(() => {
+              const filtered = boxes.filter(b => {
+                const matchSearch = !boxSearch || b.box_serial.toLowerCase().includes(boxSearch.toLowerCase());
+                const matchStatus = boxStatusFilter === 'all' || b.status === boxStatusFilter;
+                const matchStation = boxStationFilter === 'all'
+                  || (boxStationFilter === '__none__' ? !b.assigned_station_id : b.assigned_station_id === boxStationFilter);
+                const matchIssues = !boxHasIssues || (b.failed_count > 0 || b.scratch_count > 0);
+                return matchSearch && matchStatus && matchStation && matchIssues;
+              });
+              const dir = boxSortDir === 'asc' ? 1 : -1;
+              const sorted = [...filtered].sort((a, b) => {
+                switch (boxSort) {
+                  case 'serial': return dir * a.box_serial.localeCompare(b.box_serial);
+                  case 'created': return dir * (new Date(a.created_at ?? 0).getTime() - new Date(b.created_at ?? 0).getTime());
+                  case 'completed': return dir * (new Date(a.completed_at ?? 0).getTime() - new Date(b.completed_at ?? 0).getTime());
+                  case 'ecus': return dir * ((a.learned_count ?? 0) - (b.learned_count ?? 0));
+                  case 'issues': return dir * ((a.failed_count + a.scratch_count) - (b.failed_count + b.scratch_count));
+                  default: return 0;
+                }
+              });
+              return boxView === 'kanban' ? (
+              <BoxKanban
+                boxes={sorted}
+                isAdmin={user?.role === 'admin'}
+                onCardClick={b => setSelectedBox(b)}
+                onDelete={handleDeleteBox}
+                onStatusChange={handleBoxStatusChange}
+              />
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
+              {sorted.map((b: Box) => (
                 <div
                   key={b.id}
                   className="card"
                   style={{ cursor: 'pointer' }}
                   onClick={() => setSelectedBox(b)}
                 >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
                     <span style={{ fontWeight: 600, fontSize: 15 }}>{b.box_serial}</span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <span className={`badge badge-${b.status}`}>{b.status}</span>
@@ -234,33 +435,36 @@ export default function SessionDetail() {
                           className="btn btn-danger"
                           style={{ padding: '2px 8px', fontSize: 11 }}
                           onClick={e => handleDeleteBox(e, b.id, b.box_serial)}
-                        >
-                          ✕
-                        </button>
+                        >✕</button>
                       )}
                     </div>
                   </div>
-                  <div style={{ fontSize: 13, color: 'var(--text-dim)', display: 'flex', gap: 16 }}>
-                    <span>
-                      ECUs: <strong style={{ color: 'var(--text)' }}>{b.learned_count}</strong>
-                      {b.expected_ecu_count ? `/${b.expected_ecu_count}` : ''}
-                    </span>
-                    <span>
-                      Frozen:{' '}
-                      <strong style={{ color: b.inventory_frozen ? 'var(--success)' : 'var(--text-dim)' }}>
-                        {b.inventory_frozen ? 'Yes' : 'No'}
-                      </strong>
-                    </span>
+                  {b.assigned_station_name && (
+                    <div style={{ fontSize: 11, color: 'var(--primary)', fontWeight: 600, marginBottom: 6 }}>
+                      📍 {b.assigned_station_name}
+                    </div>
+                  )}
+                  <div style={{ fontSize: 13, color: 'var(--text-dim)', display: 'flex', gap: 16, marginBottom: 6 }}>
+                    <span>ECUs: <strong style={{ color: 'var(--text)' }}>{b.learned_count}{b.expected_ecu_count ? `/${b.expected_ecu_count}` : ''}</strong></span>
+                    <span>Frozen: <strong style={{ color: b.inventory_frozen ? 'var(--success)' : 'var(--text-dim)' }}>{b.inventory_frozen ? 'Yes' : 'No'}</strong></span>
                   </div>
+                  {(b.failed_count > 0 || b.scratch_count > 0) && (
+                    <div style={{ fontSize: 11, display: 'flex', gap: 10, marginBottom: 4 }}>
+                      {b.failed_count > 0 && <span style={{ color: '#ef4444', fontWeight: 600 }}>✗ {b.failed_count} failed</span>}
+                      {b.scratch_count > 0 && <span style={{ color: '#6b7280', fontWeight: 600 }}>🗑 {b.scratch_count} scratch</span>}
+                    </div>
+                  )}
                   {b.completed_at && (
-                    <div style={{ fontSize: 12, color: 'var(--success)', marginTop: 8 }}>
+                    <div style={{ fontSize: 12, color: 'var(--success)', marginTop: 4 }}>
                       ✓ Completed {format(new Date(b.completed_at), 'dd MMM HH:mm')}
                     </div>
                   )}
                 </div>
               ))}
-              {boxes.length === 0 && <p style={{ color: 'var(--text-dim)' }}>No boxes yet.</p>}
+              {sorted.length === 0 && <p style={{ color: 'var(--text-dim)' }}>No boxes match.</p>}
             </div>
+            );
+            })()}
           </>
         )}
 
@@ -273,7 +477,20 @@ export default function SessionDetail() {
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 16 }}>
               {stations.map((s: any) => (
-                <div key={s.id} className="card">
+                <div
+                  key={s.id}
+                  className="card"
+                  style={{ cursor: 'pointer', position: 'relative' }}
+                  onClick={() => setSelectedStation(s)}
+                >
+                  {session.status === 'active' && (
+                    <div
+                      style={{ position: 'absolute', top: 10, right: 10, fontSize: 11, color: 'var(--primary)', fontWeight: 600 }}
+                      onClick={e => { e.stopPropagation(); handleGoToStation(s.id); }}
+                    >
+                      Workbench →
+                    </div>
+                  )}
                   <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 8 }}>🏭 {s.name}</div>
                   <div style={{ fontSize: 13, color: 'var(--text-dim)' }}>
                     Members: {s.members?.map((m: any) => m.name).join(', ') || 'None'}
@@ -294,6 +511,19 @@ export default function SessionDetail() {
           box={selectedBox}
           onClose={() => setSelectedBox(null)}
           onRefresh={load}
+        />
+      )}
+
+      {selectedStation && (
+        <StationDetailModal
+          sessionId={id!}
+          station={selectedStation}
+          allUsers={allUsers}
+          boxes={boxes}
+          isAdmin={user?.role === 'admin'}
+          isSessionActive={session.status === 'active'}
+          onClose={() => setSelectedStation(null)}
+          onUpdated={handleStationUpdated}
         />
       )}
 
@@ -331,10 +561,63 @@ export default function SessionDetail() {
         </div>
       )}
 
+      {showSaveTemplate && (
+        <div className="modal-overlay" onClick={() => setShowSaveTemplate(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h2>Save as Template</h2>
+            <p style={{ fontSize: 13, color: 'var(--text-dim)', marginBottom: 16 }}>
+              Saves the session name and SW version to prefill future sessions.
+            </p>
+            <div className="form-group">
+              <label>Template Name</label>
+              <input
+                value={templateLabel}
+                onChange={e => setTemplateLabel(e.target.value)}
+                placeholder="E.g.: Line A \u2013 Standard"
+                autoFocus
+                onKeyDown={e => e.key === 'Enter' && handleSaveTemplate()}
+              />
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 16 }}>
+              Name: <strong>{session?.name}</strong> · SW: <strong>{session?.target_sw_version}</strong>
+            </div>
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+              <button className="btn btn-ghost" onClick={() => setShowSaveTemplate(false)}>Cancel</button>
+              <button className="btn btn-primary" onClick={handleSaveTemplate} disabled={!templateLabel.trim()}>
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showAddStation && (
         <div className="modal-overlay" onClick={() => setShowAddStation(false)}>
           <div className="modal" onClick={e => e.stopPropagation()}>
             <h2>Add Station</h2>
+
+            {stationPresets.length > 0 && (
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 8 }}>Saved presets:</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {stationPresets.map((p: any) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      style={{ background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--primary)', padding: '5px 12px', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 500 }}
+                      onClick={() => {
+                        setStationName(p.name);
+                        const validIds = (p.member_ids as string[]).filter((mid: string) => allUsers.find((u: any) => u.id === mid));
+                        setSelectedMembers(validIds);
+                      }}
+                      title={`Members: ${p.member_names?.join(', ') || 'none'}`}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             <form onSubmit={handleAddStation}>
               <div className="form-group">
                 <label>Station Name</label>
@@ -371,6 +654,9 @@ export default function SessionDetail() {
             </form>
           </div>
         </div>
+      )}
+      {showProfile && (
+        <ProfileModal onClose={() => setShowProfile(false)} />
       )}
     </>
   );

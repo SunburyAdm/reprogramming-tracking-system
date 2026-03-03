@@ -1,4 +1,4 @@
-﻿from pydantic import BaseModel
+from pydantic import BaseModel
 from typing import Optional, List
 from uuid import UUID
 from datetime import datetime
@@ -11,6 +11,26 @@ class LoginRequest(BaseModel):
     email: str
     password: str
 
+class UserCreate(BaseModel):
+    email: str
+    password: str
+    name: str
+    role: str = "viewer"
+
+class UserUpdate(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
+    password: Optional[str] = None
+    role: Optional[str] = None
+
+class ProfileUpdate(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
+    current_password: Optional[str] = None
+    new_password: Optional[str] = None
+    avatar: Optional[str] = None
+    avatar_color: Optional[str] = None
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str
@@ -20,6 +40,8 @@ class UserResponse(BaseModel):
     email: str
     name: str
     role: str
+    avatar: Optional[str] = None
+    avatar_color: Optional[str] = None
     created_at: datetime
     class Config:
         from_attributes = True
@@ -38,6 +60,9 @@ class SessionUpdate(BaseModel):
 class StationCreate(BaseModel):
     name: str
     member_ids: List[UUID] = []
+
+class StationMembersUpdate(BaseModel):
+    member_ids: List[UUID]
 
 class StationResponse(BaseModel):
     id: UUID
@@ -68,6 +93,9 @@ class BoxCreate(BaseModel):
     box_serial: str
     expected_ecu_count: Optional[int] = None
 
+class BoxStatusUpdate(BaseModel):
+    status: str
+
 class BoxResponse(BaseModel):
     id: UUID
     session_id: UUID
@@ -81,6 +109,9 @@ class BoxResponse(BaseModel):
     completed_at: Optional[datetime]
     created_at: datetime
     updated_at: datetime
+    failed_count: int = 0
+    scratch_count: int = 0
+    assigned_station_name: Optional[str] = None
     class Config:
         from_attributes = True
 

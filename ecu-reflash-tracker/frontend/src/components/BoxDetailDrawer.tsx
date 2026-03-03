@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { getBoxEcus, downloadBoxReport } from '../services/api';
+import { getBoxEcus, downloadBoxReport, deleteEcu } from '../services/api';
 import { Box, ECUContext } from '../store/index';
 import { format } from 'date-fns';
 import EcuDetailModal from './EcuDetailModal';
+import { useAuthStore } from '../store/index';
 
 interface Props {
   sessionId: string;
@@ -12,6 +13,7 @@ interface Props {
 }
 
 export default function BoxDetailDrawer({ sessionId, box, onClose, onRefresh }: Props) {
+  const { user } = useAuthStore();
   const [ecus, setEcus] = useState<ECUContext[]>([]);
   const [selectedEcu, setSelectedEcu] = useState<ECUContext | null>(null);
 
@@ -25,6 +27,17 @@ export default function BoxDetailDrawer({ sessionId, box, onClose, onRefresh }: 
   const flashing = countBy('flashing');
   const learned = countBy('learned');
   const rework = countBy('rework_pending');
+
+  const handleDeleteEcu = async (ecu: ECUContext) => {
+    if (!window.confirm(`Delete ECU "${ecu.ecu_code}"?`)) return;
+    try {
+      await deleteEcu(sessionId, box.id, ecu.id);
+      setEcus(prev => prev.filter(e => e.id !== ecu.id));
+      onRefresh();
+    } catch (err: any) {
+      alert(err?.response?.data?.detail ?? 'Error al eliminar ECU');
+    }
+  };
 
   const handleExport = async () => {
     try {
@@ -102,6 +115,7 @@ export default function BoxDetailDrawer({ sessionId, box, onClose, onRefresh }: 
               <th>Status</th>
               <th>Attempts</th>
               <th>Total Time</th>
+              {user?.role === 'admin' && !box.inventory_frozen && <th></th>}
             </tr>
           </thead>
           <tbody>
@@ -114,6 +128,18 @@ export default function BoxDetailDrawer({ sessionId, box, onClose, onRefresh }: 
                 <td style={{ color: 'var(--text-dim)' }}>
                   {e.total_time_seconds != null ? `${Math.round(e.total_time_seconds)}s` : '—'}
                 </td>
+                {user?.role === 'admin' && !box.inventory_frozen && (
+                  <td onClick={ev => ev.stopPropagation()}>
+                    {e.status === 'learned' && (
+                      <button
+                        className="btn btn-danger"
+                        style={{ padding: '2px 8px', fontSize: 11 }}
+                        title="Eliminar ECU"
+                        onClick={() => handleDeleteEcu(e)}
+                      >✕</button>
+                    )}
+                  </td>
+                )}
               </tr>
             ))}
             {ecus.length === 0 && (

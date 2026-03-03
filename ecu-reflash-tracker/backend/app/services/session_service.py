@@ -177,6 +177,56 @@ class SessionService:
         return result.scalars().all()
 
     @staticmethod
+    async def get_station(
+        db: AsyncSession,
+        station_id: UUID,
+    ) -> Station:
+        result = await db.execute(
+            select(Station)
+            .options(selectinload(Station.members))
+            .where(Station.id == station_id)
+        )
+        station = result.scalar_one_or_none()
+        if not station:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Station not found",
+            )
+        return station
+
+    @staticmethod
+    async def update_station_members(
+        db: AsyncSession,
+        station_id: UUID,
+        member_ids: List[UUID],
+    ) -> Station:
+        result = await db.execute(
+            select(Station)
+            .options(selectinload(Station.members))
+            .where(Station.id == station_id)
+        )
+        station = result.scalar_one_or_none()
+        if not station:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Station not found",
+            )
+        station.members.clear()
+        await db.flush()
+        for uid in member_ids:
+            user_result = await db.execute(select(User).where(User.id == uid))
+            user = user_result.scalar_one_or_none()
+            if user is not None:
+                station.members.append(user)
+        await db.flush()
+        refreshed = await db.execute(
+            select(Station)
+            .options(selectinload(Station.members))
+            .where(Station.id == station_id)
+        )
+        return refreshed.scalar_one()
+
+    @staticmethod
     async def delete_session(
         db: AsyncSession,
         session_id: UUID,

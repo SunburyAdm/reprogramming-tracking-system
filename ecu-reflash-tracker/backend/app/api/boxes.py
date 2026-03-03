@@ -8,7 +8,7 @@ from app.core.database import get_db
 from app.core.security import get_current_user
 from app.models import User
 from app.schemas import (
-    BoxCreate, BoxResponse,
+    BoxCreate, BoxResponse, BoxStatusUpdate,
     ECUContextResponse, FlashAttemptResponse,
     StartFlashRequest, FinishFlashRequest, StartReworkRequest,
     UploadResponse, HistoryEntry
@@ -16,12 +16,59 @@ from app.schemas import (
 from app.services.box_service import BoxService
 from app.services.flash_service import FlashService
 from app.services.s3 import s3_service
-from app.models import Upload, History
+from app.models import Upload, History, SessionBoxECU, Station
 from app.core.ws import emit_event
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 router = APIRouter(prefix="/api/sessions/{session_id}/boxes", tags=["boxes"])
+
+
+async def _enrich_boxes(db: AsyncSession, boxes: list) -> list:
+    """Attach failed_count, scratch_count, assigned_station_name to each box."""
+    if not boxes:
+        return []
+
+    box_ids = [b.id for b in boxes]
+
+    # Bulk ECU status counts in one query
+    counts_result = await db.execute(
+        select(SessionBoxECU.box_id, SessionBoxECU.status, func.count().label("cnt"))
+        .where(SessionBoxECU.box_id.in_(box_ids))
+        .group_by(SessionBoxECU.box_id, SessionBoxECU.status)
+    )
+    count_map: dict = {}
+    for row in counts_result.all():
+        count_map.setdefault(str(row.box_id), {})[row.status] = row.cnt
+
+    # Bulk station names
+    station_ids = list({b.assigned_station_id for b in boxes if b.assigned_station_id})
+    station_map: dict = {}
+    if station_ids:
+        st_result = await db.execute(select(Station).where(Station.id.in_(station_ids)))
+        for s in st_result.scalars().all():
+            station_map[str(s.id)] = s.name
+
+    enriched = []
+    for b in boxes:
+        enriched.append({
+            "id": b.id,
+            "session_id": b.session_id,
+            "box_serial": b.box_serial,
+            "expected_ecu_count": b.expected_ecu_count,
+            "learned_count": b.learned_count,
+            "inventory_frozen": b.inventory_frozen,
+            "status": b.status,
+            "assigned_station_id": b.assigned_station_id,
+            "frozen_at": b.frozen_at,
+            "completed_at": b.completed_at,
+            "created_at": b.created_at,
+            "updated_at": b.updated_at,
+            "failed_count": count_map.get(str(b.id), {}).get("failed", 0),
+            "scratch_count": count_map.get(str(b.id), {}).get("scratch", 0),
+            "assigned_station_name": station_map.get(str(b.assigned_station_id)) if b.assigned_station_id else None,
+        })
+    return enriched
 
 
 @router.get("", response_model=List[BoxResponse])
@@ -30,7 +77,8 @@ async def list_boxes(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    return await BoxService.list_boxes(db, session_id)
+    boxes = await BoxService.list_boxes(db, session_id)
+    return await _enrich_boxes(db, boxes)
 
 
 @router.post("", response_model=BoxResponse, status_code=201)
@@ -53,7 +101,9 @@ async def get_box(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    return await BoxService.get_box(db, session_id, box_id)
+    box = await BoxService.get_box(db, session_id, box_id)
+    enriched = await _enrich_boxes(db, [box])
+    return enriched[0]
 
 
 @router.post("/{box_id}/claim", response_model=BoxResponse)
@@ -66,8 +116,26 @@ async def claim_box(
 ):
     box = await BoxService.claim_box(db, session_id, box_id, station_id)
     await db.commit()
-    await emit_event("BOX_UPDATED", jsonable_encoder(box))
-    return box
+    enriched = await _enrich_boxes(db, [box])
+    await emit_event("BOX_UPDATED", jsonable_encoder(enriched[0]))
+    return enriched[0]
+
+
+@router.patch("/{box_id}/status", response_model=BoxResponse)
+async def update_box_status(
+    session_id: UUID,
+    box_id: UUID,
+    body: BoxStatusUpdate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if user.role.value != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    box = await BoxService.update_box_status(db, session_id, box_id, body.status, user)
+    await db.commit()
+    enriched = await _enrich_boxes(db, [box])
+    await emit_event("BOX_UPDATED", jsonable_encoder(enriched[0]))
+    return enriched[0]
 
 
 @router.delete("/{box_id}", status_code=204)
@@ -82,6 +150,34 @@ async def delete_box(
     await BoxService.delete_box(db, session_id, box_id)
     await db.commit()
     await emit_event("BOX_DELETED", {"session_id": str(session_id), "box_id": str(box_id)})
+
+
+@router.post("/{box_id}/ecus/{ecu_context_id}/scratch", response_model=ECUContextResponse)
+async def mark_ecu_scratch(
+    session_id: UUID,
+    box_id: UUID,
+    ecu_context_id: UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    ctx = await BoxService.mark_ecu_scratch(db, session_id, box_id, ecu_context_id, user)
+    await db.commit()
+    await emit_event("ECU_UPDATED", jsonable_encoder(ctx))
+    await emit_event("BOX_UPDATED", {"session_id": str(session_id), "box_id": str(box_id)})
+    return ctx
+
+
+@router.delete("/{box_id}/ecus/{ecu_context_id}", status_code=204)
+async def delete_ecu(
+    session_id: UUID,
+    box_id: UUID,
+    ecu_context_id: UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await BoxService.delete_ecu(db, session_id, box_id, ecu_context_id, user)
+    await db.commit()
+    await emit_event("BOX_UPDATED", {"session_id": str(session_id), "box_id": str(box_id)})
 
 
 @router.get("/{box_id}/ecus", response_model=List[ECUContextResponse])
@@ -118,8 +214,9 @@ async def freeze_inventory(
 ):
     box = await BoxService.freeze_inventory(db, session_id, box_id, user)
     await db.commit()
-    await emit_event("BOX_UPDATED", jsonable_encoder(box))
-    return box
+    enriched = await _enrich_boxes(db, [box])
+    await emit_event("BOX_UPDATED", jsonable_encoder(enriched[0]))
+    return enriched[0]
 
 
 @router.post("/{box_id}/start_flash", response_model=ECUContextResponse)

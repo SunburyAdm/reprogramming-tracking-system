@@ -19,7 +19,7 @@ class SessionBoxECU(Base):
     box_id = Column(UUID(as_uuid=True), ForeignKey("boxes.id", ondelete="CASCADE"), nullable=False)
     ecu_code = Column(String(255), nullable=False)
     status = Column(
-        SAEnum("learned", "flashing", "success", "failed", "rework_pending", name="ecu_context_status"),
+        SAEnum("learned", "flashing", "success", "failed", "rework_pending", "scratch", name="ecu_context_status"),
         default="learned",
         nullable=False,
     )

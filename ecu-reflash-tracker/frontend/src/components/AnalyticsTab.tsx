@@ -1,7 +1,6 @@
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer, PieChart, Pie, Cell,
-  LineChart, Line,
 } from 'recharts';
 
 interface BoxKPI {
@@ -11,6 +10,7 @@ interface BoxKPI {
   total_ecus: number;
   success_ecus: number;
   failed_ecus: number;
+  scratch_ecus: number;
   failure_rate: number;
   avg_flash_time_seconds: number | null;
 }
@@ -23,14 +23,15 @@ interface Analytics {
   total_ecus: number;
   success_ecus: number;
   failed_ecus: number;
+  scratch_ecus: number;
   overall_failure_rate: number;
   boxes: BoxKPI[];
-  station_timeline?: Record<string, Array<{ time: string; duration: number; result: string }>>;
+  station_timeline?: Record<string, Array<{ hour: string; count: number }>>;
 }
 
 interface Props { analytics: Analytics | null; }
 
-const PIE_COLORS = ['#22c55e', '#ef4444', '#4f8ef7'];
+const PIE_COLORS = ['#22c55e', '#ef4444', '#6b7280', '#4f8ef7'];
 const LINE_COLORS = ['#4f8ef7', '#22c55e', '#f59e0b', '#a855f7', '#f97316', '#06b6d4', '#ec4899'];
 const CHART_STYLE = { background: '#1a1d27', border: '1px solid #2e3348', color: '#e4e8f0' };
 
@@ -51,6 +52,7 @@ export default function AnalyticsTab({ analytics }: Props) {
     { label: 'Total ECUs', value: analytics.total_ecus },
     { label: 'Success ECUs', value: analytics.success_ecus, color: 'var(--success)' },
     { label: 'Failed ECUs', value: analytics.failed_ecus, color: analytics.failed_ecus > 0 ? 'var(--error)' : undefined },
+    { label: 'Scratch ECUs', value: analytics.scratch_ecus, color: analytics.scratch_ecus > 0 ? '#6b7280' : undefined },
     {
       label: 'Failure Rate',
       value: `${(analytics.overall_failure_rate * 100).toFixed(1)}%`,
@@ -62,13 +64,15 @@ export default function AnalyticsTab({ analytics }: Props) {
     name: b.box_serial,
     Success: b.success_ecus,
     Failed: b.failed_ecus,
+    Scratch: b.scratch_ecus ?? 0,
     'Avg Flash (s)': b.avg_flash_time_seconds != null ? Math.round(b.avg_flash_time_seconds) : 0,
   }));
 
   const pieData = [
     { name: 'Success', value: analytics.success_ecus },
     { name: 'Failed', value: analytics.failed_ecus },
-    { name: 'Other', value: Math.max(0, analytics.total_ecus - analytics.success_ecus - analytics.failed_ecus) },
+    { name: 'Scratch', value: analytics.scratch_ecus ?? 0 },
+    { name: 'Other', value: Math.max(0, analytics.total_ecus - analytics.success_ecus - analytics.failed_ecus - (analytics.scratch_ecus ?? 0)) },
   ].filter(d => d.value > 0);
 
   return (
@@ -96,6 +100,7 @@ export default function AnalyticsTab({ analytics }: Props) {
               <Legend wrapperStyle={{ fontSize: 12 }} />
               <Bar dataKey="Success" fill="#22c55e" radius={[4, 4, 0, 0]} />
               <Bar dataKey="Failed" fill="#ef4444" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="Scratch" fill="#6b7280" radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -141,6 +146,7 @@ export default function AnalyticsTab({ analytics }: Props) {
               <th>Total ECUs</th>
               <th>Success</th>
               <th>Failed</th>
+              <th>Scratch</th>
               <th>Failure Rate</th>
               <th>Avg Flash Time</th>
             </tr>
@@ -153,6 +159,7 @@ export default function AnalyticsTab({ analytics }: Props) {
                 <td>{b.total_ecus}</td>
                 <td style={{ color: b.success_ecus > 0 ? 'var(--success)' : 'var(--text-dim)' }}>{b.success_ecus}</td>
                 <td style={{ color: b.failed_ecus > 0 ? 'var(--error)' : 'var(--text-dim)' }}>{b.failed_ecus}</td>
+                <td style={{ color: (b.scratch_ecus ?? 0) > 0 ? '#6b7280' : 'var(--text-dim)' }}>{b.scratch_ecus ?? 0}</td>
                 <td style={{ color: b.failure_rate > 0.05 ? 'var(--error)' : 'var(--text-dim)' }}>
                   {(b.failure_rate * 100).toFixed(1)}%
                 </td>
@@ -163,7 +170,7 @@ export default function AnalyticsTab({ analytics }: Props) {
             ))}
             {analytics.boxes.length === 0 && (
               <tr>
-                <td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-dim)', padding: 24 }}>
+                <td colSpan={8} style={{ textAlign: 'center', color: 'var(--text-dim)', padding: 24 }}>
                   No box data
                 </td>
               </tr>
@@ -172,52 +179,61 @@ export default function AnalyticsTab({ analytics }: Props) {
         </table>
       </div>
 
-      {/* Station Flash Speed Timeline */}
-      {analytics.station_timeline && Object.keys(analytics.station_timeline).length > 0 && (
-        <div className="card" style={{ marginTop: 24 }}>
-          <h3 style={{ fontSize: 15, marginBottom: 16 }}>Velocidad de Flasheo por Estación</h3>
-          <ResponsiveContainer width="100%" height={280}>
-            <LineChart margin={{ top: 8, right: 16, bottom: 8, left: -10 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#2e3348" />
-              <XAxis
-                dataKey="time"
-                type="category"
-                allowDuplicatedCategory={false}
-                tick={{ fill: '#8892a4', fontSize: 10 }}
-                tickFormatter={(v: string) => {
-                  try { return new Date(v).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
-                  catch { return v; }
-                }}
-              />
-              <YAxis
-                tick={{ fill: '#8892a4', fontSize: 11 }}
-                label={{ value: 'seg', angle: -90, position: 'insideLeft', fill: '#8892a4', fontSize: 11 }}
-              />
-              <Tooltip
-                contentStyle={CHART_STYLE}
-                labelFormatter={(v: string) => {
-                  try { return new Date(v).toLocaleString(); } catch { return v; }
-                }}
-                formatter={(val: number) => [`${val}s`, 'Duración']}
-              />
-              <Legend wrapperStyle={{ fontSize: 12 }} />
-              {Object.entries(analytics.station_timeline).map(([stationName, points], idx) => (
-                <Line
-                  key={stationName}
-                  data={points}
-                  type="monotone"
-                  dataKey="duration"
-                  name={stationName}
-                  stroke={LINE_COLORS[idx % LINE_COLORS.length]}
-                  strokeWidth={2}
-                  dot={{ r: 3 }}
-                  activeDot={{ r: 5 }}
+      {/* Station ECUs/h chart */}
+      {analytics.station_timeline && Object.keys(analytics.station_timeline).length > 0 && (() => {
+        const allHours = Array.from(
+          new Set(
+            Object.values(analytics.station_timeline!).flatMap((pts: any[]) => pts.map((p: any) => p.hour))
+          )
+        ).sort();
+
+        const stationNames = Object.keys(analytics.station_timeline!);
+        const chartData = allHours.map(h => {
+          const row: Record<string, any> = {
+            hour: h,
+            label: (() => {
+              try { return new Date(h).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); }
+              catch { return h; }
+            })(),
+          };
+          stationNames.forEach(sname => {
+            const pt = (analytics.station_timeline![sname] as any[]).find((p: any) => p.hour === h);
+            row[sname] = pt ? pt.count : 0;
+          });
+          return row;
+        });
+
+        return (
+          <div className="card" style={{ marginTop: 24 }}>
+            <h3 style={{ fontSize: 15, marginBottom: 16 }}>ECUs per Hour by Station</h3>
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart data={chartData} margin={{ top: 8, right: 16, bottom: 40, left: -10 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#2e3348" />
+                <XAxis
+                  dataKey="label"
+                  tick={{ fill: '#8892a4', fontSize: 10 }}
+                  angle={-35}
+                  textAnchor="end"
+                  interval={0}
                 />
-              ))}
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      )}
+                <YAxis
+                  allowDecimals={false}
+                  tick={{ fill: '#8892a4', fontSize: 11 }}
+                  label={{ value: 'ECUs/h', angle: -90, position: 'insideLeft', fill: '#8892a4', fontSize: 11 }}
+                />
+                <Tooltip
+                  contentStyle={CHART_STYLE}
+                  formatter={(val: number, name: string) => [`${val} ECUs`, name]}
+                />
+                <Legend wrapperStyle={{ fontSize: 12 }} />
+                {stationNames.map((sname, idx) => (
+                  <Bar key={sname} dataKey={sname} fill={LINE_COLORS[idx % LINE_COLORS.length]} radius={[4, 4, 0, 0]} />
+                ))}
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        );
+      })()}
     </div>
   );
 }

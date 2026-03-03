@@ -8,7 +8,7 @@ from app.core.security import get_current_user
 from app.models import User
 from app.schemas import (
     SessionCreate, SessionUpdate, SessionResponse,
-    StationCreate, StationResponse,
+    StationCreate, StationResponse, StationMembersUpdate,
 )
 from app.services.session_service import SessionService
 from app.core.ws import emit_event
@@ -155,6 +155,32 @@ async def add_station(
     if user.role.value != "admin":
         raise HTTPException(status_code=403, detail="Admin only")
     station = await SessionService.add_station(db, session_id, body.name, body.member_ids)
+    await db.commit()
+    await emit_event("SESSION_UPDATED", {"session_id": str(session_id)})
+    return station
+
+
+@router.get("/{session_id}/stations/{station_id}", response_model=StationResponse)
+async def get_station(
+    session_id: UUID,
+    station_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    return await SessionService.get_station(db, station_id)
+
+
+@router.put("/{session_id}/stations/{station_id}/members", response_model=StationResponse)
+async def update_station_members(
+    session_id: UUID,
+    station_id: UUID,
+    body: StationMembersUpdate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if user.role.value != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    station = await SessionService.update_station_members(db, station_id, body.member_ids)
     await db.commit()
     await emit_event("SESSION_UPDATED", {"session_id": str(session_id)})
     return station

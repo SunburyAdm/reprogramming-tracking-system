@@ -17,8 +17,26 @@ export const login = (email: string, password: string) =>
 export const getMe = () =>
   api.get('/api/auth/me').then(r => r.data);
 
+export const updateProfile = (data: {
+  name?: string;
+  email?: string;
+  current_password?: string;
+  new_password?: string;
+  avatar?: string;
+  avatar_color?: string;
+}) => api.patch('/api/auth/me', data).then(r => r.data);
+
 export const getUsers = () =>
   api.get('/api/users').then(r => r.data);
+
+export const createUser = (data: { email: string; password: string; name: string; role: string }) =>
+  api.post('/api/users', data).then(r => r.data);
+
+export const updateUser = (userId: string, data: { name?: string; email?: string; password?: string; role?: string }) =>
+  api.patch(`/api/users/${userId}`, data).then(r => r.data);
+
+export const deleteUser = (userId: string) =>
+  api.delete(`/api/users/${userId}`);
 
 // ── Sessions ─────────────────────────────────────────────────────────────────
 export const listSessions = () =>
@@ -45,6 +63,12 @@ export const sessionClose = (id: string) =>
 export const getStations = (sessionId: string) =>
   api.get(`/api/sessions/${sessionId}/stations`).then(r => r.data);
 
+export const getStation = (sessionId: string, stationId: string) =>
+  api.get(`/api/sessions/${sessionId}/stations/${stationId}`).then(r => r.data);
+
+export const updateStationMembers = (sessionId: string, stationId: string, memberIds: string[]) =>
+  api.put(`/api/sessions/${sessionId}/stations/${stationId}/members`, { member_ids: memberIds }).then(r => r.data);
+
 export const createStation = (sessionId: string, data: { name: string; member_ids?: string[] }) =>
   api.post(`/api/sessions/${sessionId}/stations`, data).then(r => r.data);
 
@@ -66,8 +90,17 @@ export const getBox = (sessionId: string, boxId: string) =>
 export const createBox = (sessionId: string, data: { box_serial: string; expected_ecu_count?: number }) =>
   api.post(boxBase(sessionId), data).then(r => r.data);
 
+export const updateBoxStatus = (sessionId: string, boxId: string, status: string) =>
+  api.patch(`${boxBase(sessionId)}/${boxId}/status`, { status }).then(r => r.data);
+
 export const deleteBox = (sessionId: string, boxId: string) =>
   api.delete(`${boxBase(sessionId)}/${boxId}`);
+
+export const deleteEcu = (sessionId: string, boxId: string, ecuContextId: string) =>
+  api.delete(`${boxBase(sessionId)}/${boxId}/ecus/${ecuContextId}`);
+
+export const markEcuScratch = (sessionId: string, boxId: string, ecuContextId: string) =>
+  api.post(`${boxBase(sessionId)}/${boxId}/ecus/${ecuContextId}/scratch`).then(r => r.data);
 
 export const claimBox = (sessionId: string, boxId: string, stationId: string) =>
   api.post(`${boxBase(sessionId)}/${boxId}/claim`, null, { params: { station_id: stationId } }).then(r => r.data);
