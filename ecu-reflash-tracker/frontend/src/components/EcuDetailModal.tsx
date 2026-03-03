@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { format } from 'date-fns';
-import { getEcuAttempts, getEcuHistory, getEcuUploads } from '../services/api';
+import { getEcuAttempts, getEcuHistory, getEcuUploads, uploadEcuFile } from '../services/api';
 
 interface ECUContext {
   id: string;
@@ -79,8 +79,13 @@ export default function EcuDetailModal({ sessionId, ecu, onClose }: Props) {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [uploads, setUploads] = useState<UploadEntry[]>([]);
   const [loading, setLoading] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadKind, setUploadKind] = useState('log');
+  const [uploadNotes, setUploadNotes] = useState('');
+  const [uploadError, setUploadError] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
+  const reload = () => {
     setLoading(true);
     Promise.all([
       getEcuAttempts(sessionId, ecu.box_id, ecu.id),
@@ -92,7 +97,26 @@ export default function EcuDetailModal({ sessionId, ecu, onClose }: Props) {
       setUploads(u);
     }).catch(console.error)
       .finally(() => setLoading(false));
-  }, [sessionId, ecu.id, ecu.box_id]);
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    setUploadError('');
+    try {
+      await uploadEcuFile(sessionId, ecu.box_id, ecu.id, file, uploadKind, uploadNotes || undefined);
+      setUploadNotes('');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      reload();
+    } catch (err: any) {
+      setUploadError(err?.response?.data?.detail ?? 'Upload failed');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  useEffect(() => { reload(); }, [sessionId, ecu.id, ecu.box_id]);
 
   return (
     <div
@@ -123,7 +147,7 @@ export default function EcuDetailModal({ sessionId, ecu, onClose }: Props) {
             {ecu.status}
           </span>
           <span style={{ color: 'var(--text-dim)', fontSize: 13 }}>
-            {ecu.attempts} intento{ecu.attempts !== 1 ? 's' : ''} · {Math.round(ecu.total_time_seconds)}s total
+          {ecu.attempts} attempt{ecu.attempts !== 1 ? 's' : ''} · {Math.round(ecu.total_time_seconds)}s total
           </span>
           <span style={{ flex: 1 }} />
           <button
@@ -141,39 +165,39 @@ export default function EcuDetailModal({ sessionId, ecu, onClose }: Props) {
             className={`tab-btn ${tab === 'info' ? 'active' : ''}`}
             onClick={() => setTab('info')}
           >
-            Intentos ({attempts.length})
+            Attempts ({attempts.length})
           </button>
           <button
             className={`tab-btn ${tab === 'history' ? 'active' : ''}`}
             onClick={() => setTab('history')}
           >
-            Historial ({history.length})
+            History ({history.length})
           </button>
           <button
             className={`tab-btn ${tab === 'uploads' ? 'active' : ''}`}
             onClick={() => setTab('uploads')}
           >
-            Archivos ({uploads.length})
+            Files ({uploads.length})
           </button>
         </div>
 
         {/* Body */}
         <div style={{ overflow: 'auto', flex: 1, padding: 20 }}>
           {loading ? (
-            <div style={{ color: 'var(--text-dim)', textAlign: 'center', padding: 40 }}>Cargando…</div>
+            <div style={{ color: 'var(--text-dim)', textAlign: 'center', padding: 40 }}>Loading…</div>
           ) : tab === 'info' ? (
             <>
               {/* ECU meta */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 }}>
                 {[
                   { label: 'ECU Code', value: ecu.ecu_code },
-                  { label: 'Estado', value: ecu.status },
+                  { label: 'Status', value: ecu.status },
                   { label: 'Version', value: ecu.version },
-                  { label: 'Total intentos', value: ecu.attempts },
-                  { label: 'Tiempo total', value: `${Math.round(ecu.total_time_seconds)}s` },
+                  { label: 'Total attempts', value: ecu.attempts },
+                  { label: 'Total time', value: `${Math.round(ecu.total_time_seconds)}s` },
                   { label: 'Last attempt', value: ecu.last_attempt_duration_seconds != null ? `${ecu.last_attempt_duration_seconds.toFixed(1)}s` : '—' },
-                  { label: 'Creado', value: fmtTime(ecu.created_at) },
-                  { label: 'Actualizado', value: fmtTime(ecu.updated_at) },
+                  { label: 'Created', value: fmtTime(ecu.created_at) },
+                  { label: 'Updated', value: fmtTime(ecu.updated_at) },
                 ].map(({ label, value }) => (
                   <div key={label} style={{ background: '#1a1d27', borderRadius: 6, padding: '10px 14px' }}>
                     <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 4 }}>{label}</div>
@@ -183,19 +207,19 @@ export default function EcuDetailModal({ sessionId, ecu, onClose }: Props) {
               </div>
 
               {/* Attempts table */}
-              <h4 style={{ fontSize: 13, color: 'var(--text-dim)', marginBottom: 10 }}>Intentos de Flasheo</h4>
+              <h4 style={{ fontSize: 13, color: 'var(--text-dim)', marginBottom: 10 }}>Flash Attempts</h4>
               {attempts.length === 0 ? (
-                <div style={{ color: 'var(--text-dim)', fontSize: 13 }}>Sin intentos registrados</div>
+                <div style={{ color: 'var(--text-dim)', fontSize: 13 }}>No attempts recorded</div>
               ) : (
                 <table className="table" style={{ fontSize: 12 }}>
                   <thead>
                     <tr>
                       <th>#</th>
-                      <th>Inicio</th>
-                      <th>Fin</th>
+                      <th>Start</th>
+                      <th>End</th>
                       <th>Duration</th>
-                      <th>Resultado</th>
-                      <th>Notas</th>
+                      <th>Result</th>
+                      <th>Notes</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -219,7 +243,7 @@ export default function EcuDetailModal({ sessionId, ecu, onClose }: Props) {
             </>
           ) : tab === 'history' ? (
             history.length === 0 ? (
-              <div style={{ color: 'var(--text-dim)', textAlign: 'center', padding: 40 }}>Sin historial</div>
+              <div style={{ color: 'var(--text-dim)', textAlign: 'center', padding: 40 }}>No history</div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {history.map(h => (
@@ -241,34 +265,87 @@ export default function EcuDetailModal({ sessionId, ecu, onClose }: Props) {
               </div>
             )
           ) : (
-            uploads.length === 0 ? (
-              <div style={{ color: 'var(--text-dim)', textAlign: 'center', padding: 40 }}>
-                Sin archivos adjuntos
+            <>
+              {/* Upload form */}
+              <div style={{ background: '#1a1d27', borderRadius: 8, padding: 16, marginBottom: 20 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--primary)' }}>Attach File</div>
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <label style={{ fontSize: 11, color: 'var(--text-dim)' }}>Type</label>
+                    <select
+                      value={uploadKind}
+                      onChange={e => setUploadKind(e.target.value)}
+                      style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text)', padding: '5px 10px', fontSize: 13 }}
+                    >
+                      <option value="log">Log</option>
+                      <option value="photo">Photo</option>
+                      <option value="report">Report</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1, minWidth: 160 }}>
+                    <label style={{ fontSize: 11, color: 'var(--text-dim)' }}>Notes (optional)</label>
+                    <input
+                      value={uploadNotes}
+                      onChange={e => setUploadNotes(e.target.value)}
+                      placeholder="Describe the file…"
+                      style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text)', padding: '5px 10px', fontSize: 13 }}
+                    />
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <label style={{ fontSize: 11, color: 'var(--text-dim)' }}>File</label>
+                    <label
+                      style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 6,
+                        background: uploading ? 'var(--surface2)' : 'var(--primary)',
+                        color: '#fff', padding: '6px 14px', borderRadius: 6,
+                        cursor: uploading ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 600,
+                      }}
+                    >
+                      {uploading ? 'Uploading…' : '📎 Choose File'}
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        style={{ display: 'none' }}
+                        disabled={uploading}
+                        onChange={handleFileUpload}
+                      />
+                    </label>
+                  </div>
+                </div>
+                {uploadError && (
+                  <div style={{ color: 'var(--error)', fontSize: 12, marginTop: 8 }}>{uploadError}</div>
+                )}
               </div>
-            ) : (
-              <table className="table" style={{ fontSize: 12 }}>
-                <thead>
-                  <tr>
-                    <th>Archivo</th>
-                    <th>Tipo</th>
-                    <th>Size</th>
-                    <th>Notas</th>
-                    <th>Subido</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {uploads.map(u => (
-                    <tr key={u.id}>
-                      <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{u.filename}</td>
-                      <td><span className={`badge badge-${u.kind}`}>{u.kind}</span></td>
-                      <td style={{ color: 'var(--text-dim)' }}>{fmtBytes(u.file_size)}</td>
-                      <td style={{ color: 'var(--text-dim)' }}>{u.notes ?? '—'}</td>
-                      <td style={{ color: 'var(--text-dim)' }}>{fmtTime(u.created_at)}</td>
+
+              {/* Files table */}
+              {uploads.length === 0 ? (
+                <div style={{ color: 'var(--text-dim)', textAlign: 'center', padding: 24 }}>No attachments yet</div>
+              ) : (
+                <table className="table" style={{ fontSize: 12 }}>
+                  <thead>
+                    <tr>
+                      <th>File</th>
+                      <th>Type</th>
+                      <th>Size</th>
+                      <th>Notes</th>
+                      <th>Uploaded</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            )
+                  </thead>
+                  <tbody>
+                    {uploads.map(u => (
+                      <tr key={u.id}>
+                        <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{u.filename}</td>
+                        <td><span className={`badge badge-${u.kind}`}>{u.kind}</span></td>
+                        <td style={{ color: 'var(--text-dim)' }}>{fmtBytes(u.file_size)}</td>
+                        <td style={{ color: 'var(--text-dim)' }}>{u.notes ?? '—'}</td>
+                        <td style={{ color: 'var(--text-dim)' }}>{fmtTime(u.created_at)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </>
           )}
         </div>
       </div>

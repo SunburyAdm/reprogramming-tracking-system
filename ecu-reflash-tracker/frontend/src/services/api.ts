@@ -132,6 +132,16 @@ export const getEcuHistory = (sessionId: string, boxId: string, ecuContextId: st
 export const getEcuUploads = (sessionId: string, boxId: string, ecuContextId: string) =>
   api.get(`${boxBase(sessionId)}/${boxId}/ecus/${ecuContextId}/uploads`).then(r => r.data);
 
+export const uploadEcuFile = (sessionId: string, boxId: string, ecuContextId: string, file: File, kind: string, notes?: string) => {
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('kind', kind);
+  if (notes) fd.append('notes', notes);
+  return api.post(`${boxBase(sessionId)}/${boxId}/ecus/${ecuContextId}/uploads`, fd, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }).then(r => r.data);
+};
+
 // ── Reports / Analytics ──────────────────────────────────────────────────────
 export const getAnalytics = (sessionId: string) =>
   api.get(`/api/sessions/${sessionId}/analytics`).then(r => r.data);

@@ -44,7 +44,7 @@ function fmtDuration(secs: number | null | undefined): string {
   const r = s % 60;
   return r === 0 ? `${m}m` : `${m}m ${r}s`;
 }
-type Phase = 'select-station' | 'scan-box' | 'learning' | 'flashing' | 'blocked' | 'completed';
+type Phase = 'select-station' | 'station-dashboard' | 'learning' | 'flashing' | 'blocked' | 'completed';
 
 export default function StationWorkbench() {
   const { id: sessionId } = useParams<{ id: string }>();
@@ -52,9 +52,10 @@ export default function StationWorkbench() {
   const { user } = useAuthStore();
   const { stationId, currentBox, ecus, setStation, setCurrentBox, setEcus } = useWorkbenchStore();
 
-  const [phase, setPhase] = useState<Phase>(stationId ? 'scan-box' : 'select-station');
+  const [phase, setPhase] = useState<Phase>(stationId ? 'station-dashboard' : 'select-station');
   const [stations, setStations] = useState<Station[]>([]);
   const [allBoxes, setAllBoxes] = useState<Box[]>([]);
+  const [activeBoxes, setActiveBoxes] = useState<Box[]>([]);
   const [boxScan, setBoxScan] = useState('');
   const [ecuScan, setEcuScan] = useState('');
   const [message, setMessage] = useState<{ text: string; ok: boolean }>({ text: '', ok: true });
@@ -66,6 +67,8 @@ export default function StationWorkbench() {
   const msgTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Track boxes whose blocked-banner was dismissed so polling can't re-show it
   const dismissedBlockedRef = useRef<string | null>(null);
+  // Prevents polling from auto-navigating away when the tech is reviewing a just-completed flash table
+  const awaitingBoxClose = useRef(false);
 
   const notify = (text: string, ok = true) => {
     if (msgTimer.current) clearTimeout(msgTimer.current);
@@ -90,7 +93,7 @@ export default function StationWorkbench() {
     }
     else if (box.inventory_frozen) setPhase('flashing');
     else if (box.status === 'learning' || box.status === 'in_progress') setPhase('learning');
-    else setPhase('scan-box');
+    else setPhase('station-dashboard');
   };
 
   const refreshWorkbench = async () => {
@@ -98,13 +101,21 @@ export default function StationWorkbench() {
     const [st, bx] = await Promise.all([getStations(sessionId), listBoxes(sessionId)]);
     setStations(st);
     setAllBoxes(bx);
+    // Update active boxes for current station
+    const liveStationId = useWorkbenchStore.getState().stationId;
+    if (liveStationId) {
+      setActiveBoxes(bx.filter((b: Box) => b.assigned_station_id === liveStationId && b.status !== 'completed'));
+    }
     // Always read currentBox from Zustand store directly to avoid stale closure
     const liveBox = useWorkbenchStore.getState().currentBox;
     if (liveBox) {
       const updated = bx.find((b: Box) => b.id === liveBox.id);
       if (updated) {
         setCurrentBox(updated);
-        determinePhase(updated);
+        // Don't auto-navigate away if the tech is reviewing a completed box before closing
+        if (!awaitingBoxClose.current) {
+          determinePhase(updated);
+        }
         getBoxEcus(sessionId, updated.id).then(setEcus);
       }
     }
@@ -126,23 +137,14 @@ export default function StationWorkbench() {
   const handleSelectStation = async (sid: string) => {
     setStation(sid);
     setEcus([]);
-    // Check if this station already has a box assigned
+    setCurrentBox(null);
     try {
       const boxes: Box[] = await listBoxes(sessionId!);
       setAllBoxes(boxes);
-      const assigned = boxes.find(b => b.assigned_station_id === sid && b.status !== 'completed');
-      if (assigned) {
-        setCurrentBox(assigned);
-        const ecuList = await getBoxEcus(sessionId!, assigned.id);
-        setEcus(ecuList);
-        determinePhase(assigned);
-      } else {
-        setCurrentBox(null);
-        setPhase('scan-box');
-      }
+      setActiveBoxes(boxes.filter(b => b.assigned_station_id === sid && b.status !== 'completed'));
+      setPhase('station-dashboard');
     } catch {
-      setCurrentBox(null);
-      setPhase('scan-box');
+      setPhase('station-dashboard');
     }
   };
 
@@ -154,14 +156,23 @@ export default function StationWorkbench() {
       const found = boxes.find(b => b.box_serial.toLowerCase() === boxScan.trim().toLowerCase());
       if (!found) { notify('Box not found', false); return; }
       const box = await claimBox(sessionId, found.id, stationId);
+      const updated = [...boxes.filter(b => b.assigned_station_id === stationId && b.status !== 'completed' && b.id !== box.id), box];
+      setActiveBoxes(updated);
       setCurrentBox(box);
       const ecuList = await getBoxEcus(sessionId, box.id);
       setEcus(ecuList);
       setBoxScan('');
-      determinePhase(box);
+      setPhase('learning');
     } catch (err: any) {
       notify(extractError(err, 'Error claiming box'), false);
     }
+  };
+
+  const handleOpenBox = async (box: Box) => {
+    setCurrentBox(box);
+    const ecuList = await getBoxEcus(sessionId!, box.id);
+    setEcus(ecuList);
+    determinePhase(box);
   };
 
   const handleScanEcu = async (e: React.FormEvent) => {
@@ -193,7 +204,13 @@ export default function StationWorkbench() {
   };
 
   const handleFreeze = async () => {
-    if (!sessionId || !currentBox) return;
+    if (!sessionId || !currentBox || !stationId) return;
+    // Enforce: only 1 box flashing at a time per station
+    const alreadyFlashing = activeBoxes.find(b => b.inventory_frozen && b.status !== 'completed' && b.id !== currentBox.id);
+    if (alreadyFlashing) {
+      notify(`Finish flashing ${alreadyFlashing.box_serial} before freezing another box`, false);
+      return;
+    }
     try {
       const box = await freezeBox(sessionId, currentBox.id);
       setCurrentBox(box);
@@ -238,13 +255,39 @@ export default function StationWorkbench() {
         expected_version: ecu.version,
       });
       const box = await refreshBox();
-      if (box) { setCurrentBox(box); determinePhase(box); }
+      if (box) {
+        setCurrentBox(box);
+        if (box.status === 'completed') {
+          // Stay on the flash table — let the tech review and click "Finish Box"
+          awaitingBoxClose.current = true;
+        } else {
+          determinePhase(box);
+        }
+      }
       const ecuList = await getBoxEcus(sessionId, currentBox.id);
       setEcus(ecuList);
       notify(result === 'success' ? `✓ ${ecu.ecu_code} success` : `✗ ${ecu.ecu_code} failed`, result === 'success');
     } catch (err: any) {
       notify(extractError(err, 'Error finishing flash'), false);
     }
+  };
+
+  const handleFinishBox = async () => {
+    awaitingBoxClose.current = false;
+    if (sessionId && stationId) {
+      const bx = await listBoxes(sessionId);
+      setAllBoxes(bx);
+      const active = bx.filter((b: Box) => b.assigned_station_id === stationId && b.status !== 'completed');
+      setActiveBoxes(active);
+      const learningCount = active.filter((b: Box) => !b.inventory_frozen).length;
+      notify(learningCount > 0
+        ? `Box completed! 📖 ${learningCount} box${learningCount !== 1 ? 'es' : ''} in learning — open one to continue`
+        : '🎉 Box completed!'
+      );
+    }
+    setCurrentBox(null);
+    setEcus([]);
+    setPhase('station-dashboard');
   };
 
   const handleRework = async (ecu: ECUContext) => {
@@ -271,7 +314,7 @@ export default function StationWorkbench() {
       setCurrentBox(updatedBox);
       setEcus(ecuList);
       determinePhase(updatedBox);
-      notify(`\u{1f5d1}\ufe0f ${ecu.ecu_code} marcado como scratch`);
+      notify(`🗑️ ${ecu.ecu_code} marked as scratch`);
     } catch (err: any) {
       notify(extractError(err, 'Error marking scratch'), false);
     }
@@ -310,7 +353,7 @@ export default function StationWorkbench() {
             🏭 {currentStationName}
           </span>
         )}
-        {currentBox && (
+        {currentBox && phase !== 'station-dashboard' && (
           <span style={{ fontSize: 13, marginRight: 12 }}>
             📦 {currentBox.box_serial}
           </span>
@@ -377,11 +420,17 @@ export default function StationWorkbench() {
                   <div style={{ fontSize: 13, color: 'var(--text-dim)', marginTop: 4 }}>
                     {s.members.map((m: any) => m.name).join(', ') || 'No members'}
                   </div>
-                  {assignedBox && (
-                    <div style={{ marginTop: 10, fontSize: 13, fontWeight: 500, color: 'var(--primary)' }}>
-                      {assignedBox.box_serial} → continuar
-                    </div>
-                  )}
+                  {(() => {
+                    const stnBoxes = allBoxes.filter(b => b.assigned_station_id === s.id && b.status !== 'completed');
+                    if (stnBoxes.length === 0) return null;
+                    const hasFlashing = stnBoxes.some(b => b.inventory_frozen);
+                    return (
+                      <div style={{ marginTop: 10, fontSize: 12, fontWeight: 500, color: 'var(--primary)' }}>
+                        {stnBoxes.length} box{stnBoxes.length !== 1 ? 'es' : ''} active
+                        {hasFlashing && <span style={{ color: '#a78bfa', marginLeft: 6 }}>· ⚡ flashing</span>}
+                      </div>
+                    );
+                  })()}
                 </div>
                 );
               })}
@@ -392,32 +441,112 @@ export default function StationWorkbench() {
           </div>
         )}
 
-        {/* ── Phase: Scan Box ───────────────────────────────────────────────── */}
-        {phase === 'scan-box' && (
+        {/* ── Phase: Station Dashboard ─────────────────────────────────────── */}
+        {phase === 'station-dashboard' && stationId && (
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 }}>
-              <h2>Scan / Enter Box Serial</h2>
+              <h2>🏭 {currentStationName}</h2>
               <button
                 className="btn btn-ghost"
                 style={{ fontSize: 12 }}
-                onClick={() => setPhase('select-station')}
+                onClick={() => { setStation(''); setCurrentBox(null); setEcus([]); setActiveBoxes([]); setPhase('select-station'); }}
               >
                 Change Station
               </button>
             </div>
-            <form onSubmit={handleClaimBox} style={{ display: 'flex', gap: 12, maxWidth: 440 }}>
-              <input
-                style={{
-                  flex: 1, background: 'var(--surface2)', border: '1px solid var(--border)',
-                  color: 'var(--text)', padding: '10px 14px', borderRadius: 8, fontSize: 15,
-                }}
-                value={boxScan}
-                onChange={e => setBoxScan(e.target.value)}
-                placeholder="BOX-001"
-                autoFocus
-              />
-              <button type="submit" className="btn btn-primary" style={{ fontSize: 15 }}>Claim</button>
-            </form>
+
+            {/* Scan new box */}
+            {(() => {
+              const flashingBox = activeBoxes.find(b => b.inventory_frozen && b.status !== 'completed');
+              return (
+                <div style={{ marginBottom: 28 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-dim)', marginBottom: 10 }}>
+                    Scan New Box
+                    {flashingBox && (
+                      <span style={{ marginLeft: 10, fontSize: 12, color: '#f59e0b', fontWeight: 400 }}>
+                        ⚠ Finish flashing {flashingBox.box_serial} before starting another flash
+                      </span>
+                    )}
+                  </div>
+                  <form onSubmit={handleClaimBox} style={{ display: 'flex', gap: 12, maxWidth: 440 }}>
+                    <input
+                      style={{
+                        flex: 1, background: 'var(--surface2)', border: '1px solid var(--border)',
+                        color: 'var(--text)', padding: '10px 14px', borderRadius: 8, fontSize: 15,
+                      }}
+                      value={boxScan}
+                      onChange={e => setBoxScan(e.target.value)}
+                      placeholder="BOX-001"
+                      autoFocus
+                    />
+                    <button type="submit" className="btn btn-primary" style={{ fontSize: 15 }}>Claim</button>
+                  </form>
+                </div>
+              );
+            })()}
+
+            {/* Active box list */}
+            {activeBoxes.length === 0 ? (
+              <div style={{ color: 'var(--text-dim)', fontSize: 14, padding: '24px 0' }}>
+                No active boxes — scan a box serial to begin.
+              </div>
+            ) : (
+              <div>
+                {/* Learning boxes */}
+                {activeBoxes.filter(b => !b.inventory_frozen).length > 0 && (
+                  <div style={{ marginBottom: 20 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: '#a855f7', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 1 }}>
+                      📖 Learning ({activeBoxes.filter(b => !b.inventory_frozen).length})
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {activeBoxes.filter(b => !b.inventory_frozen).map(b => (
+                        <div
+                          key={b.id}
+                          className="card"
+                          style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 18px', cursor: 'pointer' }}
+                          onClick={() => handleOpenBox(b)}
+                        >
+                          <span style={{ fontWeight: 600, fontSize: 15 }}>📦 {b.box_serial}</span>
+                          <span className={`badge badge-${b.status}`}>{b.status}</span>
+                          <span style={{ color: 'var(--text-dim)', fontSize: 13 }}>
+                            {b.learned_count}{b.expected_ecu_count ? `/${b.expected_ecu_count}` : ''} ECUs
+                          </span>
+                          <span style={{ flex: 1 }} />
+                          <button className="btn btn-ghost" style={{ fontSize: 12 }} onClick={ev => { ev.stopPropagation(); handleOpenBox(b); }}>Open →</button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {/* Flashing / blocked boxes */}
+                {activeBoxes.filter(b => b.inventory_frozen).length > 0 && (
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: '#a78bfa', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 1 }}>
+                      ⚡ Flashing ({activeBoxes.filter(b => b.inventory_frozen).length})
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {activeBoxes.filter(b => b.inventory_frozen).map(b => (
+                        <div
+                          key={b.id}
+                          className="card"
+                          style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 18px', cursor: 'pointer', borderColor: '#a78bfa44' }}
+                          onClick={() => handleOpenBox(b)}
+                        >
+                          <span style={{ fontWeight: 600, fontSize: 15 }}>📦 {b.box_serial}</span>
+                          <span className={`badge badge-${b.status}`}>{b.status}</span>
+                          <span style={{ color: 'var(--text-dim)', fontSize: 13 }}>
+                            {b.learned_count} ECUs
+                            {b.failed_count > 0 && <span style={{ color: 'var(--error)', marginLeft: 6 }}>✕ {b.failed_count} failed</span>}
+                          </span>
+                          <span style={{ flex: 1 }} />
+                          <button className="btn btn-primary" style={{ fontSize: 12 }} onClick={ev => { ev.stopPropagation(); handleOpenBox(b); }}>Flash Table →</button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 
@@ -425,6 +554,7 @@ export default function StationWorkbench() {
         {phase === 'learning' && currentBox && (
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 20 }}>
+              <button className="btn btn-ghost" style={{ fontSize: 12 }} onClick={() => { setCurrentBox(null); setEcus([]); setPhase('station-dashboard'); }}>← Back</button>
               <h2>Learning: {currentBox.box_serial}</h2>
               <span style={{ color: 'var(--text-dim)', fontSize: 14 }}>{ecus.length} ECUs scanned</span>
               <span className="navbar-spacer" />
@@ -492,14 +622,49 @@ export default function StationWorkbench() {
         {phase === 'flashing' && currentBox && (
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 20 }}>
+              <button className="btn btn-ghost" style={{ fontSize: 12 }} onClick={() => { awaitingBoxClose.current = false; setCurrentBox(null); setEcus([]); setPhase('station-dashboard'); }}>← Back</button>
               <h2>Flashing: {currentBox.box_serial}</h2>
               <span style={{ fontSize: 13, color: 'var(--text-dim)' }}>
-                {ecus.filter(e => e.status === 'success').length}/{ecus.length} done
+                {ecus.filter(e => e.status === 'success' || e.status === 'scratch').length}/{ecus.filter(e => e.status !== 'scratch').length + ecus.filter(e => e.status === 'scratch').length} done
               </span>
               {currentBox.status === 'blocked' && (
                 <span className="badge badge-blocked" style={{ marginLeft: 8 }}>BLOCKED</span>
               )}
+              <span style={{ flex: 1 }} />
+              {currentBox.status === 'completed' && (
+                <button
+                  className="btn btn-success"
+                  style={{ fontWeight: 700, fontSize: 14, padding: '8px 20px' }}
+                  onClick={handleFinishBox}
+                >
+                  ✅ Finish Box
+                </button>
+              )}
             </div>
+            {currentBox.status === 'completed' && (
+              <div style={{
+                background: 'rgba(34,197,94,.12)', border: '1px solid rgba(34,197,94,.35)',
+                borderRadius: 10, padding: '14px 20px', marginBottom: 20,
+                display: 'flex', alignItems: 'center', gap: 16,
+              }}>
+                <span style={{ fontSize: 22 }}>🎉</span>
+                <div>
+                  <div style={{ fontWeight: 700, color: 'var(--success)', fontSize: 15 }}>
+                    All ECUs completed — box ready to close
+                  </div>
+                  {activeBoxes.filter(b => !b.inventory_frozen && b.id !== currentBox.id).length > 0 && (
+                    <div style={{ fontSize: 13, color: 'var(--text-dim)', marginTop: 3 }}>
+                      📖 {activeBoxes.filter(b => !b.inventory_frozen && b.id !== currentBox.id).length} box
+                      {activeBoxes.filter(b => !b.inventory_frozen && b.id !== currentBox.id).length !== 1 ? 'es' : ''} in learning waiting to be frozen
+                    </div>
+                  )}
+                </div>
+                <span style={{ flex: 1 }} />
+                <button className="btn btn-success" style={{ fontWeight: 700 }} onClick={handleFinishBox}>
+                  ✅ Finish Box
+                </button>
+              </div>
+            )}
             <table className="table">
               <thead>
                 <tr>
@@ -649,12 +814,15 @@ export default function StationWorkbench() {
             <p style={{ color: 'var(--text-dim)', marginTop: 8 }}>
               {currentBox.box_serial} — one or more ECUs failed. Rework failed units to unblock.
             </p>
-            <button className="btn btn-warn" style={{ marginTop: 20 }} onClick={() => {
-              dismissedBlockedRef.current = currentBox.id;
-              setPhase('flashing');
-            }}>
-              View Flash Table
-            </button>
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginTop: 20 }}>
+              <button className="btn btn-ghost" onClick={() => { awaitingBoxClose.current = false; setCurrentBox(null); setEcus([]); setPhase('station-dashboard'); }}>← Back</button>
+              <button className="btn btn-warn" onClick={() => {
+                dismissedBlockedRef.current = currentBox.id;
+                setPhase('flashing');
+              }}>
+                View Flash Table
+              </button>
+            </div>
           </div>
         )}
 
@@ -669,7 +837,7 @@ export default function StationWorkbench() {
             <button
               className="btn btn-primary"
               style={{ marginTop: 20 }}
-              onClick={() => { setCurrentBox(null); setEcus([]); setPhase('scan-box'); }}
+              onClick={() => { setCurrentBox(null); setEcus([]); setPhase('station-dashboard'); }}
             >
               Scan Next Box
             </button>

@@ -1,6 +1,7 @@
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer, PieChart, Pie, Cell,
+  AreaChart, Area, ReferenceLine, LineChart, Line,
 } from 'recharts';
 
 interface BoxKPI {
@@ -205,9 +206,9 @@ export default function AnalyticsTab({ analytics }: Props) {
 
         return (
           <div className="card" style={{ marginTop: 24 }}>
-            <h3 style={{ fontSize: 15, marginBottom: 16 }}>ECUs per Hour by Station</h3>
+            <h3 style={{ fontSize: 15, marginBottom: 16 }}>ECUs per 30 min by Station</h3>
             <ResponsiveContainer width="100%" height={280}>
-              <BarChart data={chartData} margin={{ top: 8, right: 16, bottom: 40, left: -10 }}>
+              <LineChart data={chartData} margin={{ top: 8, right: 16, bottom: 40, left: -10 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#2e3348" />
                 <XAxis
                   dataKey="label"
@@ -219,7 +220,7 @@ export default function AnalyticsTab({ analytics }: Props) {
                 <YAxis
                   allowDecimals={false}
                   tick={{ fill: '#8892a4', fontSize: 11 }}
-                  label={{ value: 'ECUs/h', angle: -90, position: 'insideLeft', fill: '#8892a4', fontSize: 11 }}
+                  label={{ value: 'ECUs/30m', angle: -90, position: 'insideLeft', fill: '#8892a4', fontSize: 11 }}
                 />
                 <Tooltip
                   contentStyle={CHART_STYLE}
@@ -227,9 +228,109 @@ export default function AnalyticsTab({ analytics }: Props) {
                 />
                 <Legend wrapperStyle={{ fontSize: 12 }} />
                 {stationNames.map((sname, idx) => (
-                  <Bar key={sname} dataKey={sname} fill={LINE_COLORS[idx % LINE_COLORS.length]} radius={[4, 4, 0, 0]} />
+                  <Line
+                    key={sname}
+                    type="monotone"
+                    dataKey={sname}
+                    stroke={LINE_COLORS[idx % LINE_COLORS.length]}
+                    strokeWidth={2}
+                    dot={{ r: 3 }}
+                    activeDot={{ r: 5 }}
+                  />
                 ))}
-              </BarChart>
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        );
+      })()}
+
+      {/* Cumulative ECUs flashed over time */}
+      {analytics.station_timeline && Object.keys(analytics.station_timeline).length > 0 && (() => {
+        const allHours = Array.from(
+          new Set(
+            Object.values(analytics.station_timeline!).flatMap((pts: any[]) => pts.map((p: any) => p.hour))
+          )
+        ).sort();
+
+        const stationNames = Object.keys(analytics.station_timeline!);
+
+        let running = 0;
+        const cumulativeData = allHours.map(h => {
+          const hourTotal = stationNames.reduce((sum, sname) => {
+            const pt = (analytics.station_timeline![sname] as any[]).find((p: any) => p.hour === h);
+            return sum + (pt ? pt.count : 0);
+          }, 0);
+          running += hourTotal;
+          return {
+            label: (() => {
+              try { return new Date(h).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); }
+              catch { return h; }
+            })(),
+            'Cumulative ECUs': running,
+            'ECUs this hour': hourTotal,
+          };
+        });
+
+        const target = analytics.total_ecus;
+
+        return (
+          <div className="card" style={{ marginTop: 24 }}>
+            <h3 style={{ fontSize: 15, marginBottom: 4 }}>Cumulative ECUs Flashed</h3>
+            <p style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 16 }}>
+              Running total of ECUs processed over the session timeline.
+            </p>
+            <ResponsiveContainer width="100%" height={280}>
+              <AreaChart data={cumulativeData} margin={{ top: 8, right: 16, bottom: 40, left: -10 }}>
+                <defs>
+                  <linearGradient id="cumulGradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#4f8ef7" stopOpacity={0.3} />
+                    <stop offset="95%" stopColor="#4f8ef7" stopOpacity={0.02} />
+                  </linearGradient>
+                  <linearGradient id="hourGradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#22c55e" stopOpacity={0.25} />
+                    <stop offset="95%" stopColor="#22c55e" stopOpacity={0.02} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#2e3348" />
+                <XAxis
+                  dataKey="label"
+                  tick={{ fill: '#8892a4', fontSize: 10 }}
+                  angle={-35}
+                  textAnchor="end"
+                  interval={0}
+                />
+                <YAxis
+                  allowDecimals={false}
+                  tick={{ fill: '#8892a4', fontSize: 11 }}
+                  label={{ value: 'ECUs', angle: -90, position: 'insideLeft', fill: '#8892a4', fontSize: 11 }}
+                />
+                <Tooltip contentStyle={CHART_STYLE} />
+                <Legend wrapperStyle={{ fontSize: 12 }} />
+                {target > 0 && (
+                  <ReferenceLine
+                    y={target}
+                    stroke="#f59e0b"
+                    strokeDasharray="6 3"
+                    label={{ value: `Target: ${target}`, fill: '#f59e0b', fontSize: 11, position: 'right' }}
+                  />
+                )}
+                <Area
+                  type="monotone"
+                  dataKey="ECUs this hour"
+                  stroke="#22c55e"
+                  strokeWidth={1.5}
+                  fill="url(#hourGradient)"
+                  dot={false}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="Cumulative ECUs"
+                  stroke="#4f8ef7"
+                  strokeWidth={2}
+                  fill="url(#cumulGradient)"
+                  dot={{ r: 3, fill: '#4f8ef7' }}
+                />
+              </AreaChart>
             </ResponsiveContainer>
           </div>
         );

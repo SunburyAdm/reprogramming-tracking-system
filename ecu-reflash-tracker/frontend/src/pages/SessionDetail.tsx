@@ -384,7 +384,7 @@ export default function SessionDetail() {
                   }}
                 >▦ Grid</button>
               </div>
-              {session.status === 'active' && user?.role === 'admin' && (
+              {session.status === 'active' && (user?.role === 'admin' || user?.role === 'tech') && (
                 <button className="btn btn-primary" onClick={() => setShowAddBox(true)}>+ Add Box</button>
               )}
             </div>
@@ -631,9 +631,28 @@ export default function SessionDetail() {
               </div>
               <div className="form-group">
                 <label>Assign Members</label>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {allUsers.map((u: any) => (
-                    <label key={u.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, cursor: 'pointer' }}>
+                <div style={{
+                  border: '1px solid var(--border)',
+                  borderRadius: 8,
+                  overflow: 'hidden',
+                  maxHeight: 220,
+                  overflowY: 'auto',
+                }}>
+                  {allUsers.length === 0 && (
+                    <div style={{ padding: '12px 14px', fontSize: 13, color: 'var(--text-dim)' }}>No users available</div>
+                  )}
+                  {allUsers.map((u: any, idx: number) => (
+                    <label
+                      key={u.id}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 10,
+                        padding: '9px 14px',
+                        cursor: 'pointer',
+                        background: selectedMembers.includes(u.id) ? 'rgba(99,102,241,.08)' : 'transparent',
+                        borderTop: idx > 0 ? '1px solid var(--border)' : 'none',
+                        userSelect: 'none',
+                      }}
+                    >
                       <input
                         type="checkbox"
                         checked={selectedMembers.includes(u.id)}
@@ -641,11 +660,23 @@ export default function SessionDetail() {
                           if (e.target.checked) setSelectedMembers(p => [...p, u.id]);
                           else setSelectedMembers(p => p.filter(id => id !== u.id));
                         }}
+                        style={{ accentColor: 'var(--primary)', width: 15, height: 15, flexShrink: 0 }}
                       />
-                      {u.name} <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>({u.role})</span>
+                      <span style={{ fontSize: 14, fontWeight: 500, flex: 1 }}>{u.name}</span>
+                      <span style={{
+                        fontSize: 11, color: 'var(--text-dim)',
+                        background: 'var(--surface2)',
+                        border: '1px solid var(--border)',
+                        borderRadius: 4, padding: '1px 6px',
+                      }}>{u.role}</span>
                     </label>
                   ))}
                 </div>
+                {selectedMembers.length > 0 && (
+                  <div style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 6, paddingLeft: 2 }}>
+                    {selectedMembers.length} member{selectedMembers.length !== 1 ? 's' : ''} selected
+                  </div>
+                )}
               </div>
               <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 20 }}>
                 <button type="button" className="btn btn-ghost" onClick={() => setShowAddStation(false)}>Cancel</button>

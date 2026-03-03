@@ -196,9 +196,10 @@ class AnalyticsService:
         for a in all_attempts:
             if a.result == "success" and a.ended_at is not None:
                 sname = station_map.get(a.station_id, "Unknown") if a.station_id else "Unknown"
-                hour_bucket = a.ended_at.replace(minute=0, second=0, microsecond=0).isoformat()
-                station_hourly.setdefault(sname, {}).setdefault(hour_bucket, 0)
-                station_hourly[sname][hour_bucket] += 1
+                half = 0 if a.ended_at.minute < 30 else 30
+                bucket = a.ended_at.replace(minute=half, second=0, microsecond=0).isoformat()
+                station_hourly.setdefault(sname, {}).setdefault(bucket, 0)
+                station_hourly[sname][bucket] += 1
 
         # Convert to sorted list of {hour, count} per station
         station_timeline: Dict[str, List[Dict[str, Any]]] = {
