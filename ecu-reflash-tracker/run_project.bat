@@ -43,14 +43,24 @@ if not exist ".env" (
     powershell -Command "(Get-Content .env) -replace 'MINIO_URL=.*', 'MINIO_URL=http://localhost:9000' | Set-Content .env"
 )
 
-echo Resetting database for fresh start...
-if exist "ecu.db" del "ecu.db"
+REM check database type
+for /f "tokens=1,* delims==" %%A in ('findstr "^DATABASE_URL=" .env') do set DBURL=%%B
 
-echo Initializing database tables and seed data...
-python scripts\init_db.py
+echo Using database: %DBURL%
+
+echo.%DBURL% | findstr /b /i "sqlite" >nul
+if %ERRORLEVEL%==0 (
+    echo ⚠ Using SQLite database (local file).
+    echo    To switch to PostgreSQL, update DATABASE_URL in .env accordingly.
+    echo    Example: postgresql://user:pass@localhost:5432/ecu_db
+    if exist "ecu.db" del "ecu.db"
+)
 
 echo Running database migrations...
-alembic -c alembic\alembic.ini upgrade head
+alembic -c alembic\\alembic.ini upgrade head
+
+echo Seeding database...
+python scripts\init_db.py
 
 echo Backend setup complete.
 
@@ -78,6 +88,11 @@ echo.
 echo [Starting MinIO Server]
 if not exist "C:\tmp\minio-data" mkdir "C:\tmp\minio-data"
 start "MinIO Server" bin\minio.exe server "C:\tmp\minio-data" --address :9000
+
+REM wait for MinIO
+ping -n 1 localhost >nul
+REM no easy port check; user must ensure it starts
+
 
 REM Start backend
 echo.

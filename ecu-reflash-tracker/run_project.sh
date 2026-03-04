@@ -38,19 +38,34 @@ pip install aiosqlite
 if [ ! -f ".env" ]; then
     echo "Configuring environment file..."
     cp .env.example .env
-    # Modify .env for local SQLite and MinIO
+    # default to SQLite for quick local setup
     sed -i 's|DATABASE_URL=.*|DATABASE_URL=sqlite+aiosqlite:///./ecu.db|' .env
     sed -i 's|MINIO_URL=.*|MINIO_URL=http://localhost:9000|' .env
 fi
 
-echo "Resetting database for fresh start..."
-rm -f ecu.db
+# check if user is using sqlite or postgres
+DBURL=$(grep '^DATABASE_URL=' .env | cut -d'=' -f2-)
+if echo "$DBURL" | grep -q '^sqlite'; then
+    echo "⚠ Using SQLite database (local file)."
+    echo "   To switch to PostgreSQL, update DATABASE_URL in .env accordingly."
+    echo "   Example: postgresql://user:pass@localhost:5432/ecu_db"
+else
+    echo "Using PostgreSQL database: $DBURL"
+fi
 
-echo "Initializing database tables and seed data..."
-python scripts/init_db.py
+if echo "$DBURL" | grep -q '^sqlite'; then
+    echo "Resetting database for fresh start..."
+    rm -f ecu.db
+fi
 
+# run migrations before seeding so that init_db can insert data without recreating tables
+# also handle PostgreSQL case by skipping removal above if using a different DB
 echo "Running database migrations..."
 alembic -c alembic/alembic.ini upgrade head
+
+# now seed (init_db creates tables only if missing and inserts demo data)
+echo "Seeding database..."
+python scripts/init_db.py
 
 echo "Backend setup complete."
 
@@ -77,6 +92,16 @@ echo -e "\n[Starting MinIO Server]"
 mkdir -p /tmp/minio-data
 ./bin/minio server /tmp/minio-data --address :9000 &
 MINIO_PID=$!
+
+# wait for MinIO to accept connections
+echo "Waiting for MinIO to be ready..."
+for i in {1..10}; do
+    if curl -s http://localhost:9000/minio/health/ready > /dev/null; then
+        echo "MinIO is ready"
+        break
+    fi
+    sleep 1
+done
 
 # Start backend
 echo -e "\n[Starting Backend Server]"
