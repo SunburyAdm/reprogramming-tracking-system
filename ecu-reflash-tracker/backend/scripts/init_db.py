@@ -23,7 +23,7 @@ async def init_database():
     # Import ALL models to register them with Base.metadata
     from app.models import (  # noqa: F401
         User, ECU, Session, Station, Box,
-        SessionBoxECU, FlashAttempt, Upload, History,
+        SessionBoxECU, FlashAttempt, Upload, ECUHistory,
         station_members,
     )
 

@@ -7,9 +7,9 @@ from app.models.box import Box
 from app.models.session_box_ecu import SessionBoxECU
 from app.models.flash_attempt import FlashAttempt
 from app.models.upload import Upload
-from app.models.history import History
+from app.models.history import ECUHistory
 
 __all__ = [
     "User", "ECU", "Session", "Station", "station_members", "StationSetup",
-    "Box", "SessionBoxECU", "FlashAttempt", "Upload", "History",
+    "Box", "SessionBoxECU", "FlashAttempt", "Upload", "ECUHistory",
 ]
