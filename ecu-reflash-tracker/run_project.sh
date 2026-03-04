@@ -46,6 +46,9 @@ if [ ! -f ".env" ]; then
     sed -i 's|MINIO_URL=.*|MINIO_URL=http://localhost:9000|' .env
 fi
 
+echo "Resetting database for fresh start..."
+rm -f ecu.db
+
 echo "Initializing database tables and seed data..."
 python scripts/init_db.py
 

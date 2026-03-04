@@ -46,6 +46,9 @@ if not exist ".env" (
     powershell -Command "(Get-Content .env) -replace 'MINIO_URL=.*', 'MINIO_URL=http://localhost:9000' | Set-Content .env"
 )
 
+echo Resetting database for fresh start...
+if exist "ecu.db" del "ecu.db"
+
 echo Initializing database tables and seed data...
 python scripts\init_db.py
 
