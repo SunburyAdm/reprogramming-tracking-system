@@ -21,8 +21,8 @@ class FlashAttempt(Base):
         nullable=False,
     )
     duration_seconds = Column(Float, nullable=True)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
-    station_id = Column(UUID(as_uuid=True), ForeignKey("stations.id"), nullable=True)
+    user_id = Column(String(36), ForeignKey("users.id"), nullable=True)
+    station_id = Column(String(36), ForeignKey("stations.id"), nullable=True)
     notes = Column(String(1000), nullable=True)
 
     ecu_context = relationship("SessionBoxECU", back_populates="flash_attempts")

@@ -23,8 +23,8 @@ class SessionBoxECU(Base):
         nullable=False,
     )
     attempts = Column(Integer, default=0)
-    last_station_id = Column(UUID(as_uuid=True), ForeignKey("stations.id"), nullable=True)
-    last_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    last_station_id = Column(String(36), ForeignKey("stations.id"), nullable=True)
+    last_user_id = Column(String(36), ForeignKey("users.id"), nullable=True)
     current_attempt_started_at = Column(DateTime, nullable=True)
     last_attempt_duration_seconds = Column(Float, nullable=True)
     total_time_seconds = Column(Float, default=0.0)

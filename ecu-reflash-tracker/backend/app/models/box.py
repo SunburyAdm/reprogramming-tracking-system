@@ -19,7 +19,7 @@ class Box(Base):
         default="pending",
         nullable=False,
     )
-    assigned_station_id = Column(UUID(as_uuid=True), ForeignKey("stations.id"), nullable=True)
+    assigned_station_id = Column(String(36), ForeignKey("stations.id"), nullable=True)
     frozen_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
