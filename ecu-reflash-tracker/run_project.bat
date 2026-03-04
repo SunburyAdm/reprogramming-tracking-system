@@ -50,7 +50,7 @@ echo Initializing database tables and seed data...
 python scripts\init_db.py
 
 echo Running database migrations...
-alembic upgrade head
+alembic -c alembic\alembic.ini upgrade head
 
 echo Backend setup complete.
 
