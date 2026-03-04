@@ -1,7 +1,6 @@
 import uuid
 from datetime import datetime
 from sqlalchemy import Column, String, Integer, Float, DateTime, ForeignKey, Enum as SAEnum, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 
@@ -14,9 +13,9 @@ class SessionBoxECU(Base):
         UniqueConstraint("session_id", "box_id", "ecu_code", name="uq_session_box_ecu"),
     )
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    session_id = Column(UUID(as_uuid=True), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False)
-    box_id = Column(UUID(as_uuid=True), ForeignKey("boxes.id", ondelete="CASCADE"), nullable=False)
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    session_id = Column(String(36), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False)
+    box_id = Column(String(36), ForeignKey("boxes.id", ondelete="CASCADE"), nullable=False)
     ecu_code = Column(String(255), nullable=False)
     status = Column(
         SAEnum("learned", "flashing", "success", "failed", "rework_pending", "scratch", name="ecu_context_status"),

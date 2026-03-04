@@ -1,6 +1,5 @@
 import uuid
 from sqlalchemy import Column, String, DateTime, BigInteger, ForeignKey
-from sqlalchemy.dialects.postgresql import UUID
 from datetime import datetime
 from sqlalchemy.orm import relationship
 
@@ -10,9 +9,9 @@ from app.core.database import Base
 class Upload(Base):
     __tablename__ = "uploads"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    ecu_context_id = Column(UUID(as_uuid=True), ForeignKey("session_box_ecus.id", ondelete="CASCADE"), nullable=False, index=True)
-    uploader_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    ecu_context_id = Column(String(36), ForeignKey("session_box_ecus.id", ondelete="CASCADE"), nullable=False, index=True)
+    uploader_id = Column(String(36), ForeignKey("users.id"), nullable=False)
     filename = Column(String(500), nullable=False)
     s3_key = Column(String(1000), nullable=False)
     file_size = Column(BigInteger, default=0)

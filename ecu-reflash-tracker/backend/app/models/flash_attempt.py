@@ -1,7 +1,6 @@
 import uuid
 from datetime import datetime
 from sqlalchemy import Column, String, Integer, Float, DateTime, ForeignKey, Enum as SAEnum
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 
@@ -9,10 +8,10 @@ from app.core.database import Base
 class FlashAttempt(Base):
     __tablename__ = "flash_attempts"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    session_id = Column(UUID(as_uuid=True), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False)
-    box_id = Column(UUID(as_uuid=True), ForeignKey("boxes.id", ondelete="CASCADE"), nullable=False)
-    ecu_context_id = Column(UUID(as_uuid=True), ForeignKey("session_box_ecus.id", ondelete="CASCADE"), nullable=False)
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    session_id = Column(String(36), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False)
+    box_id = Column(String(36), ForeignKey("boxes.id", ondelete="CASCADE"), nullable=False)
+    ecu_context_id = Column(String(36), ForeignKey("session_box_ecus.id", ondelete="CASCADE"), nullable=False)
     attempt_no = Column(Integer, nullable=False)
     started_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     ended_at = Column(DateTime, nullable=True)
