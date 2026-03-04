@@ -12,13 +12,10 @@ echo "================================================"
 echo "ECU Reflash Tracker - Auto Run Script"
 echo "================================================"
 
-# Install MinIO if not present
-if ! command -v minio &> /dev/null; then
-    echo "Downloading MinIO binary..."
-    wget -q https://dl.min.io/server/minio/release/linux-amd64/minio -O minio
-    chmod +x minio
-    echo "MinIO downloaded and configured."
-fi
+# Install MinIO to local bin directory
+echo "Installing MinIO to bin directory..."
+bash bin/install-minio.sh
+echo "✓ MinIO installed"
 
 # Backend setup
 echo -e "\n[Backend Setup]"
@@ -78,7 +75,7 @@ cd ..
 # Start MinIO
 echo -e "\n[Starting MinIO Server]"
 mkdir -p /tmp/minio-data
-./minio server /tmp/minio-data --address :9000 &
+./bin/minio server /tmp/minio-data --address :9000 &
 MINIO_PID=$!
 
 # Start backend

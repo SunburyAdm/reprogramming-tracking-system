@@ -11,13 +11,10 @@ echo ================================================
 echo ECU Reflash Tracker - Auto Run Script (Windows)
 echo ================================================
 
-REM Install MinIO if not present
-where minio >nul 2>nul
-if %ERRORLEVEL% NEQ 0 (
-    echo Downloading MinIO binary...
-    powershell -Command "Invoke-WebRequest -Uri 'https://dl.min.io/server/minio/release/windows-amd64/minio.exe' -OutFile 'minio.exe'"
-    echo MinIO downloaded.
-)
+REM Install MinIO to local bin directory
+echo Installing MinIO to bin directory...
+call bin\install-minio.bat
+echo MinIO installed
 
 REM Backend setup
 echo.
@@ -80,7 +77,7 @@ REM Start MinIO
 echo.
 echo [Starting MinIO Server]
 if not exist "C:\tmp\minio-data" mkdir "C:\tmp\minio-data"
-start "MinIO Server" minio.exe server "C:\tmp\minio-data" --address :9000
+start "MinIO Server" bin\minio.exe server "C:\tmp\minio-data" --address :9000
 
 REM Start backend
 echo.
