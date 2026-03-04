@@ -76,6 +76,14 @@ export default function StationWorkbench() {
   const [reflashTarget, setReflashTarget] = useState<ECUContext | null>(null);
   const [pendingFlash, setPendingFlash] = useState<Set<string>>(new Set());
   const { confirmReflash } = usePrefsStore();
+
+  // Scanner mode (flashing phase)
+  const [scannerMode, setScannerMode] = useState(false);
+  const [scannerInput, setScannerInput] = useState('');
+  const [scannerFeedback, setScannerFeedback] = useState<{ text: string; ok: boolean } | null>(null);
+  const scannerInputRef = useRef<HTMLInputElement>(null);
+  const scannerFeedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scannerDebounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const t = useT();
 
   // Station setups
@@ -147,6 +155,31 @@ export default function StationWorkbench() {
     const interval = setInterval(refreshWorkbench, 4000);
     return () => clearInterval(interval);
   }, [sessionId]);
+
+  // Turn off scanner mode when leaving the flashing phase
+  useEffect(() => {
+    if (phase !== 'flashing') {
+      setScannerMode(false);
+      setScannerFeedback(null);
+      setScannerInput('');
+    }
+  }, [phase]);
+
+  // Debounce-based auto-submit for scanners that don't send Enter
+  useEffect(() => {
+    if (!scannerMode || !scannerInput.trim()) return;
+    if (scannerDebounceTimer.current) clearTimeout(scannerDebounceTimer.current);
+    scannerDebounceTimer.current = setTimeout(() => {
+      const val = scannerInput.trim();
+      if (val) {
+        setScannerInput('');
+        handleScannerSubmit(val);
+      }
+    }, 250);
+    return () => {
+      if (scannerDebounceTimer.current) clearTimeout(scannerDebounceTimer.current);
+    };
+  }, [scannerInput, scannerMode]);
 
 
   const handleSelectStation = async (sid: string) => {
@@ -289,6 +322,36 @@ export default function StationWorkbench() {
     } catch (err: any) {
       notify(extractError(err, 'Error finishing flash'), false);
     }
+  };
+
+  const flashFeedback = (text: string, ok: boolean) => {
+    if (scannerFeedbackTimer.current) clearTimeout(scannerFeedbackTimer.current);
+    setScannerFeedback({ text, ok });
+    scannerFeedbackTimer.current = setTimeout(() => setScannerFeedback(null), 3000);
+  };
+
+  const handleScannerSubmit = async (raw: string) => {
+    const code = raw.trim();
+    if (!code || !sessionId || !currentBox) return;
+    const match = ecus.find(e => e.ecu_code === code);
+    if (!match) {
+      flashFeedback(`⚠ Code not found: ${code}`, false);
+      return;
+    }
+    if (match.status === 'learned' || match.status === 'rework_pending') {
+      flashFeedback(`⏳ Starting flash: ${code}…`, true);
+      await handleStartFlash(match);
+      flashFeedback(`▶ Flashing started: ${code}`, true);
+    } else if (match.status === 'flashing') {
+      const result = flashResult[match.id] ?? 'success';
+      flashFeedback(`⏳ Finishing flash: ${code}…`, true);
+      await handleFinishFlash(match);
+      flashFeedback(result === 'success' ? `✓ ${code} — success` : `✗ ${code} — failed`, result === 'success');
+    } else {
+      flashFeedback(`ℹ ${code} is already ${match.status}`, false);
+    }
+    // Refocus for next scan
+    setTimeout(() => scannerInputRef.current?.focus(), 80);
   };
 
   const handleFinishBox = async () => {
@@ -885,6 +948,20 @@ export default function StationWorkbench() {
                 <span className="badge badge-blocked" style={{ marginLeft: 8 }}>BLOCKED</span>
               )}
               <span style={{ flex: 1 }} />
+              {/* Scanner mode toggle */}
+              <button
+                className={`btn ${scannerMode ? 'btn-primary' : 'btn-ghost'}`}
+                style={{ fontSize: 12, padding: '5px 14px', border: scannerMode ? undefined : '1px solid #60a5fa88' }}
+                onClick={() => {
+                  setScannerMode(m => !m);
+                  setScannerFeedback(null);
+                  setScannerInput('');
+                  setTimeout(() => scannerInputRef.current?.focus(), 80);
+                }}
+                title="Toggle scanner mode — use a barcode gun to start/finish flashing"
+              >
+                {scannerMode ? '🔫 Scanner ON' : '🔫 Scanner'}
+              </button>
               {currentBox.status === 'completed' && (
                 <button
                   className="btn btn-success"
@@ -895,6 +972,47 @@ export default function StationWorkbench() {
                 </button>
               )}
             </div>
+            {/* ── Scanner mode bar ────────────────────────────────────── */}
+            {scannerMode && (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16,
+                background: 'rgba(96,165,250,.10)', border: '1px solid #60a5fa55',
+                borderRadius: 10, padding: '10px 16px',
+              }}>
+                <span style={{ fontSize: 18 }}>🔫</span>
+                <input
+                  ref={scannerInputRef}
+                  autoFocus
+                  value={scannerInput}
+                  onChange={ev => setScannerInput(ev.target.value)}
+                  onKeyDown={ev => {
+                    if (ev.key === 'Enter' && scannerInput.trim()) {
+                      if (scannerDebounceTimer.current) clearTimeout(scannerDebounceTimer.current);
+                      const val = scannerInput.trim();
+                      setScannerInput('');
+                      handleScannerSubmit(val);
+                    }
+                  }}
+                  placeholder="Scan ECU barcode — Start Flash on first scan, Finish on second…"
+                  style={{
+                    flex: 1, background: 'var(--surface)', border: '1px solid #60a5fa88',
+                    color: 'var(--text)', padding: '8px 14px', borderRadius: 8, fontSize: 14,
+                  }}
+                />
+                {scannerFeedback && (
+                  <span style={{
+                    fontSize: 13, fontWeight: 600, padding: '4px 12px', borderRadius: 6,
+                    background: scannerFeedback.ok ? 'rgba(34,197,94,.15)' : 'rgba(239,68,68,.15)',
+                    color: scannerFeedback.ok ? 'var(--success)' : 'var(--error)',
+                    border: `1px solid ${scannerFeedback.ok ? 'rgba(34,197,94,.3)' : 'rgba(239,68,68,.3)'}`,
+                    minWidth: 220, textAlign: 'center',
+                  }}>
+                    {scannerFeedback.text}
+                  </span>
+                )}
+              </div>
+            )}
+
             {currentBox.status === 'completed' && (
               <div style={{
                 background: 'rgba(34,197,94,.12)', border: '1px solid rgba(34,197,94,.35)',
