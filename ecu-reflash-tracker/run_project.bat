@@ -46,9 +46,9 @@ if not exist ".env" (
 REM check database type
 for /f "tokens=1,* delims==" %%A in ('findstr "^DATABASE_URL=" .env') do set DBURL=%%B
 
-echo Using database: %DBURL%
+echo Using database: "%DBURL%"
 
-echo.%DBURL% | findstr /b /i "sqlite" >nul
+echo %DBURL% | findstr /b /i "sqlite" >nul
 if %ERRORLEVEL%==0 (
     echo ⚠ Using SQLite database (local file).
     echo    To switch to PostgreSQL, update DATABASE_URL in .env accordingly.
