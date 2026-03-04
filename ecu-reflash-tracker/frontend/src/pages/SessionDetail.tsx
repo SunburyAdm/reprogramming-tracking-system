@@ -26,7 +26,7 @@ export default function SessionDetail() {
   const [showProfile, setShowProfile] = useState(false);
   const [templateLabel, setTemplateLabel] = useState('');
   const [boxes, setBoxes] = useState<Box[]>([]);
-  const [tab, setTab] = useState<'boxes' | 'stations' | 'analytics'>('boxes');
+  const [tab, setTab] = useState<'boxes' | 'stations' | 'setups' | 'analytics'>('boxes');
   const [boxView, setBoxView] = useState<'kanban' | 'grid'>('kanban');
   const [boxSearch, setBoxSearch] = useState('');
   const [boxStatusFilter, setBoxStatusFilter] = useState<string>('all');
@@ -283,6 +283,12 @@ export default function SessionDetail() {
             Stations ({stations.length})
           </button>
           <button
+            className={`tab-btn ${tab === 'setups' ? 'active' : ''}`}
+            onClick={() => setTab('setups')}
+          >
+            Setups
+          </button>
+          <button
             className={`tab-btn ${tab === 'analytics' ? 'active' : ''}`}
             onClick={() => setTab('analytics')}
           >
@@ -500,6 +506,56 @@ export default function SessionDetail() {
               {stations.length === 0 && <p style={{ color: 'var(--text-dim)' }}>No stations yet.</p>}
             </div>
           </>
+        )}
+
+        {tab === 'setups' && (
+          <div>
+            {stations.every((s: any) => !s.setups || s.setups.length === 0) && (
+              <p style={{ color: 'var(--text-dim)', padding: '20px 0' }}>No setups registered in any station.</p>
+            )}
+            {stations.map((s: any) => {
+              const setups = s.setups ?? [];
+              if (setups.length === 0) return null;
+              // Collect all unique attribute keys across all setups of this station
+              const allKeys = Array.from(
+                new Set(setups.flatMap((su: any) => Object.keys(su.attributes ?? {})))
+              ) as string[];
+              return (
+                <div key={s.id} style={{ marginBottom: 32 }}>
+                  <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    🏭 {s.name}
+                    <span style={{ fontSize: 12, color: 'var(--text-dim)', fontWeight: 400 }}>{setups.length} setup{setups.length !== 1 ? 's' : ''}</span>
+                  </div>
+                  <div style={{ overflowX: 'auto' }}>
+                    <table className="table" style={{ width: '100%' }}>
+                      <thead>
+                        <tr>
+                          <th>Name</th>
+                          {allKeys.map(k => <th key={k}>{k}</th>)}
+                          <th style={{ color: 'var(--text-dim)', fontSize: 11 }}>Added</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {setups.map((su: any) => (
+                          <tr key={su.id}>
+                            <td style={{ fontWeight: 600 }}>🔧 {su.name}</td>
+                            {allKeys.map(k => (
+                              <td key={k} style={{ color: su.attributes?.[k] ? 'var(--text)' : 'var(--text-dim)' }}>
+                                {su.attributes?.[k] ?? '—'}
+                              </td>
+                            ))}
+                            <td style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+                              {su.created_at ? format(new Date(su.created_at), 'MMM d, yyyy') : '—'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         )}
 
         {tab === 'analytics' && <AnalyticsTab analytics={analytics} />}
