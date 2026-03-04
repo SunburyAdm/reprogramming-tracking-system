@@ -3,8 +3,9 @@ import { useParams, useNavigate } from 'react-router-dom';
 import {
   getStations, listBoxes, claimBox, scanEcu,
   freezeBox, startFlash, finishFlash, startRework, getBoxEcus, getBox, deleteEcu, markEcuScratch,
+  createStationSetup, updateStationSetup, deleteStationSetup,
 } from '../services/api';
-import { useAuthStore, useWorkbenchStore, usePrefsStore, ECUContext, Station, Box } from '../store/index';
+import { useAuthStore, useWorkbenchStore, usePrefsStore, ECUContext, Station, Box, StationSetup } from '../store/index';
 import EcuDetailModal from '../components/EcuDetailModal';
 import ProfileModal, { AvatarCircle } from '../components/ProfileModal';
 import { useT } from '../i18n';
@@ -76,6 +77,13 @@ export default function StationWorkbench() {
   const [pendingFlash, setPendingFlash] = useState<Set<string>>(new Set());
   const { confirmReflash } = usePrefsStore();
   const t = useT();
+
+  // Station setups
+  const [showSetupForm, setShowSetupForm] = useState(false);
+  const [editingSetup, setEditingSetup] = useState<StationSetup | null>(null);
+  const [setupName, setSetupName] = useState('');
+  const [setupFields, setSetupFields] = useState<{ key: string; value: string }[]>([]);
+  const [setupSaving, setSetupSaving] = useState(false);
 
   const notify = (text: string, ok = true) => {
     if (msgTimer.current) clearTimeout(msgTimer.current);
@@ -340,6 +348,49 @@ export default function StationWorkbench() {
   };
 
   const currentStationName = stations.find(s => s.id === stationId)?.name ?? stationId;
+  const currentStation = stations.find(s => s.id === stationId) ?? null;
+  const currentSetups: StationSetup[] = currentStation?.setups ?? [];
+
+  const openAddSetup = () => { setEditingSetup(null); setSetupName(''); setSetupFields([]); setShowSetupForm(true); };
+  const openEditSetup = (s: StationSetup) => {
+    setEditingSetup(s);
+    setSetupName(s.name);
+    setSetupFields(Object.entries(s.attributes ?? {}).map(([key, value]) => ({ key, value })));
+    setShowSetupForm(true);
+  };
+  const cancelSetupForm = () => { setShowSetupForm(false); setEditingSetup(null); setSetupName(''); setSetupFields([]); };
+  const handleSaveSetup = async () => {
+    if (!sessionId || !stationId || !setupName.trim()) return;
+    setSetupSaving(true);
+    try {
+      const attributes = Object.fromEntries(setupFields.filter(f => f.key.trim()).map(f => [f.key.trim(), f.value]));
+      const payload = { name: setupName.trim(), attributes };
+      if (editingSetup) {
+        await updateStationSetup(sessionId, stationId, editingSetup.id, payload);
+        notify('Setup updated');
+      } else {
+        await createStationSetup(sessionId, stationId, payload);
+        notify('Setup added');
+      }
+      cancelSetupForm();
+      await refreshWorkbench();
+    } catch (err: any) {
+      notify(extractError(err, 'Error saving setup'), false);
+    } finally {
+      setSetupSaving(false);
+    }
+  };
+  const handleDeleteSetup = async (sid: string) => {
+    if (!sessionId || !stationId) return;
+    if (!window.confirm('Delete this setup?')) return;
+    try {
+      await deleteStationSetup(sessionId, stationId, sid);
+      notify('Setup deleted');
+      await refreshWorkbench();
+    } catch (err: any) {
+      notify(extractError(err, 'Error deleting setup'), false);
+    }
+  };
 
   return (
     <>
@@ -563,7 +614,7 @@ export default function StationWorkbench() {
             {allBoxes.filter(b => b.status === 'pending').length > 0 && (
               <div style={{ marginTop: 28 }}>
                 <div style={{ fontSize: 12, fontWeight: 700, color: '#6b7280', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 1 }}>
-                  ⏳ Pendientes — sin asignar ({allBoxes.filter(b => b.status === 'pending').length})
+                  ⏳ Pending — unassigned ({allBoxes.filter(b => b.status === 'pending').length})
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                   {allBoxes.filter(b => b.status === 'pending').map(b => (
@@ -576,13 +627,115 @@ export default function StationWorkbench() {
                       <span style={{ fontWeight: 600, fontSize: 14 }}>{b.box_serial}</span>
                       <span className="badge badge-pending">pending</span>
                       {b.expected_ecu_count
-                        ? <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>{b.expected_ecu_count} ECUs esperados</span>
+                        ? <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>{b.expected_ecu_count} ECUs expected</span>
                         : null}
                     </div>
                   ))}
                 </div>
               </div>
             )}
+
+            {/* ── Station Setups ─────────────────────────────────────────────── */}
+            <div style={{ marginTop: 32 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: '#60a5fa', textTransform: 'uppercase', letterSpacing: 1 }}>
+                  🔧 Station Setups ({currentSetups.length})
+                </div>
+                {!showSetupForm && (
+                  <button className="btn btn-ghost" style={{ fontSize: 12, padding: '3px 10px' }} onClick={openAddSetup}>
+                    + Add Setup
+                  </button>
+                )}
+              </div>
+
+              {/* Inline add/edit form */}
+              {showSetupForm && (
+                <div style={{
+                  padding: '16px 18px', marginBottom: 14,
+                  background: 'var(--surface2)', border: '1px solid #60a5fa55',
+                  borderRadius: 10,
+                }}>
+                  <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 12, color: '#60a5fa' }}>
+                    {editingSetup ? '✏️ Edit Setup' : '➕ New Setup'}
+                  </div>
+
+                  {/* Setup name */}
+                  <div style={{ marginBottom: 12 }}>
+                    <label style={{ fontSize: 11, color: 'var(--text-dim)', display: 'block', marginBottom: 3 }}>Name *</label>
+                    <input
+                      style={{ width: '100%', background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text)', padding: '7px 10px', borderRadius: 6, fontSize: 13, boxSizing: 'border-box' }}
+                      value={setupName}
+                      onChange={e => setSetupName(e.target.value)}
+                      placeholder="e.g. Bay A, Bench 1"
+                    />
+                  </div>
+
+                  {/* Dynamic key-value fields */}
+                  <div style={{ marginBottom: 8 }}>
+                    <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 6 }}>Fields</div>
+                    {setupFields.map((f, i) => (
+                      <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6, alignItems: 'center' }}>
+                        <input
+                          style={{ flex: '0 0 38%', background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text)', padding: '6px 10px', borderRadius: 6, fontSize: 13, boxSizing: 'border-box' }}
+                          value={f.key}
+                          onChange={e => setSetupFields(prev => prev.map((r, j) => j === i ? { ...r, key: e.target.value } : r))}
+                          placeholder="Label"
+                        />
+                        <input
+                          style={{ flex: 1, background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text)', padding: '6px 10px', borderRadius: 6, fontSize: 13, boxSizing: 'border-box' }}
+                          value={f.value}
+                          onChange={e => setSetupFields(prev => prev.map((r, j) => j === i ? { ...r, value: e.target.value } : r))}
+                          placeholder="Value"
+                        />
+                        <button
+                          className="btn btn-ghost"
+                          style={{ fontSize: 14, padding: '4px 8px', color: 'var(--danger)' }}
+                          onClick={() => setSetupFields(prev => prev.filter((_, j) => j !== i))}
+                          title="Remove field"
+                        >×</button>
+                      </div>
+                    ))}
+                    <button
+                      className="btn btn-ghost"
+                      style={{ fontSize: 12, padding: '4px 12px', marginTop: 2 }}
+                      onClick={() => setSetupFields(prev => [...prev, { key: '', value: '' }])}
+                    >+ Add Field</button>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                    <button className="btn btn-primary" style={{ fontSize: 13 }} disabled={!setupName.trim() || setupSaving} onClick={handleSaveSetup}>
+                      {setupSaving ? 'Saving…' : 'Save'}
+                    </button>
+                    <button className="btn btn-ghost" style={{ fontSize: 13 }} onClick={cancelSetupForm}>Cancel</button>
+                  </div>
+                </div>
+              )}
+
+              {/* Existing setups */}
+              {currentSetups.length === 0 && !showSetupForm && (
+                <div style={{ color: 'var(--text-dim)', fontSize: 13, padding: '10px 0' }}>No setups registered — add one to document this station's tools and equipment.</div>
+              )}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {currentSetups.map(s => (
+                  <div key={s.id} style={{
+                    padding: '12px 16px', background: 'var(--surface2)',
+                    border: '1px solid var(--border)', borderRadius: 8,
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: Object.keys(s.attributes ?? {}).length > 0 ? 8 : 0 }}>
+                      <span style={{ fontWeight: 700, fontSize: 14 }}>🔧 {s.name}</span>
+                      <span style={{ flex: 1 }} />
+                      <button className="btn btn-ghost" style={{ fontSize: 11, padding: '2px 8px' }} onClick={() => openEditSetup(s)}>✏️ Edit</button>
+                      <button className="btn btn-danger" style={{ fontSize: 11, padding: '2px 8px' }} onClick={() => handleDeleteSetup(s.id)}>×</button>
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 20px', fontSize: 12, color: 'var(--text-dim)' }}>
+                      {Object.entries(s.attributes ?? {}).map(([k, v]) => (
+                        <span key={k}><b>{k}:</b> {v}</span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         )}
 
@@ -600,6 +753,19 @@ export default function StationWorkbench() {
               }}>
                 {ecus.length}{currentBox.expected_ecu_count ? `/${currentBox.expected_ecu_count}` : ''} ECUs
               </span>
+              {/* Compact setup strip */}
+              {currentSetups.length > 0 && (
+                <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {currentSetups.map(s => (
+                    <span key={s.id} title={Object.entries(s.attributes ?? {}).map(([k, v]) => `${k}: ${v}`).join(' • ')} style={{
+                      background: 'var(--surface2)', border: '1px solid #60a5fa44',
+                      borderRadius: 6, padding: '2px 9px', fontSize: 11, color: '#60a5fa',
+                    }}>
+                      🔧 {s.name}
+                    </span>
+                  ))}
+                </span>
+              )}
               <span className="navbar-spacer" />
               <button
                 className="btn btn-success"
@@ -628,7 +794,7 @@ export default function StationWorkbench() {
             {currentBox.expected_ecu_count != null && currentBox.expected_ecu_count > 0 && (
               <div style={{ marginBottom: 18 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-dim)', marginBottom: 5 }}>
-                  <span>Progreso de escaneo</span>
+                  <span>Scan progress</span>
                   <span style={{ fontWeight: 700, color: ecus.length >= currentBox.expected_ecu_count ? 'var(--success)' : '#f59e0b' }}>
                     {ecus.length} / {currentBox.expected_ecu_count}
                   </span>
@@ -653,7 +819,7 @@ export default function StationWorkbench() {
                 borderRadius: 8,
               }}>
                 <div style={{ fontSize: 11, fontWeight: 700, color: '#6b7280', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 1 }}>
-                  ⏳ Cajas pendientes en sesión ({allBoxes.filter(b => b.status === 'pending').length})
+                  ⏳ Pending boxes in session ({allBoxes.filter(b => b.status === 'pending').length})
                 </div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                   {allBoxes.filter(b => b.status === 'pending').map(b => (

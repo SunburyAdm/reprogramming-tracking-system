@@ -64,12 +64,33 @@ class StationCreate(BaseModel):
 class StationMembersUpdate(BaseModel):
     member_ids: List[UUID]
 
+# ─── Station Setup ────────────────────────────────────────────────────────────
+
+class StationSetupCreate(BaseModel):
+    name: str
+    attributes: dict[str, str] = {}
+
+class StationSetupUpdate(BaseModel):
+    name: Optional[str] = None
+    attributes: Optional[dict[str, str]] = None
+
+class StationSetupResponse(BaseModel):
+    id: UUID
+    station_id: UUID
+    name: str
+    attributes: dict[str, str] = {}
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    class Config:
+        from_attributes = True
+
 class StationResponse(BaseModel):
     id: UUID
     session_id: UUID
     name: str
     created_at: datetime
     members: List[UserResponse] = []
+    setups: List[StationSetupResponse] = []
     class Config:
         from_attributes = True
 

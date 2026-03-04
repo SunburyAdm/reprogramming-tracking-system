@@ -24,3 +24,4 @@ class Station(Base):
     session = relationship("Session", back_populates="stations")
     members = relationship("User", secondary=station_members)
     boxes = relationship("Box", back_populates="assigned_station")
+    setups = relationship("StationSetup", back_populates="station", cascade="all, delete-orphan", order_by="StationSetup.created_at")

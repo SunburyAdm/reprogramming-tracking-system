@@ -72,6 +72,25 @@ export const updateStationMembers = (sessionId: string, stationId: string, membe
 export const createStation = (sessionId: string, data: { name: string; member_ids?: string[] }) =>
   api.post(`/api/sessions/${sessionId}/stations`, data).then(r => r.data);
 
+export const getStationSetups = (sessionId: string, stationId: string) =>
+  api.get(`/api/sessions/${sessionId}/stations/${stationId}/setups`).then(r => r.data);
+
+export const createStationSetup = (
+  sessionId: string,
+  stationId: string,
+  data: { name: string; pc_id?: string; tool_name?: string; tool_version?: string; cable_serial?: string; adapter_serial?: string; notes?: string }
+) => api.post(`/api/sessions/${sessionId}/stations/${stationId}/setups`, data).then(r => r.data);
+
+export const updateStationSetup = (
+  sessionId: string,
+  stationId: string,
+  setupId: string,
+  data: Partial<{ name: string; pc_id: string; tool_name: string; tool_version: string; cable_serial: string; adapter_serial: string; notes: string }>
+) => api.patch(`/api/sessions/${sessionId}/stations/${stationId}/setups/${setupId}`, data).then(r => r.data);
+
+export const deleteStationSetup = (sessionId: string, stationId: string, setupId: string) =>
+  api.delete(`/api/sessions/${sessionId}/stations/${stationId}/setups/${setupId}`);
+
 export const deleteSession = (id: string) =>
   api.delete(`/api/sessions/${id}`);
 

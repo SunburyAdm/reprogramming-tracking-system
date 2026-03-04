@@ -9,6 +9,8 @@ from sqlalchemy.orm import selectinload
 from fastapi import HTTPException, status
 
 from app.models import Session, Station, User
+from app.models.station_setup import StationSetup
+from app.schemas import StationSetupCreate, StationSetupUpdate
 
 
 class SessionService:
@@ -62,7 +64,10 @@ class SessionService:
     async def get_session(db: AsyncSession, session_id: UUID) -> Session:
         result = await db.execute(
             select(Session)
-            .options(selectinload(Session.stations).selectinload(Station.members))
+            .options(
+                selectinload(Session.stations).selectinload(Station.members),
+                selectinload(Session.stations).selectinload(Station.setups),
+            )
             .where(Session.id == session_id)
         )
         session = result.scalar_one_or_none()
@@ -78,7 +83,10 @@ class SessionService:
         db: AsyncSession,
         user_id: Optional[UUID] = None,
     ) -> List[Session]:
-        query = select(Session).options(selectinload(Session.stations).selectinload(Station.members))
+        query = select(Session).options(
+            selectinload(Session.stations).selectinload(Station.members),
+            selectinload(Session.stations).selectinload(Station.setups),
+        )
         if user_id is not None:
             query = query.where(Session.created_by == user_id)
         result = await db.execute(query)
@@ -159,7 +167,7 @@ class SessionService:
         # Re-fetch with eager-loaded members to avoid lazy-load MissingGreenlet on serialization
         refreshed = await db.execute(
             select(Station)
-            .options(selectinload(Station.members))
+            .options(selectinload(Station.members), selectinload(Station.setups))
             .where(Station.id == station.id)
         )
         return refreshed.scalar_one()
@@ -171,7 +179,7 @@ class SessionService:
     ) -> List[Station]:
         result = await db.execute(
             select(Station)
-            .options(selectinload(Station.members))
+            .options(selectinload(Station.members), selectinload(Station.setups))
             .where(Station.session_id == session_id)
         )
         return result.scalars().all()
@@ -183,7 +191,7 @@ class SessionService:
     ) -> Station:
         result = await db.execute(
             select(Station)
-            .options(selectinload(Station.members))
+            .options(selectinload(Station.members), selectinload(Station.setups))
             .where(Station.id == station_id)
         )
         station = result.scalar_one_or_none()
@@ -202,7 +210,7 @@ class SessionService:
     ) -> Station:
         result = await db.execute(
             select(Station)
-            .options(selectinload(Station.members))
+            .options(selectinload(Station.members), selectinload(Station.setups))
             .where(Station.id == station_id)
         )
         station = result.scalar_one_or_none()
@@ -221,7 +229,7 @@ class SessionService:
         await db.flush()
         refreshed = await db.execute(
             select(Station)
-            .options(selectinload(Station.members))
+            .options(selectinload(Station.members), selectinload(Station.setups))
             .where(Station.id == station_id)
         )
         return refreshed.scalar_one()
@@ -267,3 +275,58 @@ class SessionService:
         session.closed_at = None
         await db.flush()
         return session
+    # ─── Station Setups ───────────────────────────────────────────────────────
+
+    @staticmethod
+    async def get_station_setups(
+        db: AsyncSession,
+        station_id: UUID,
+    ) -> List[StationSetup]:
+        result = await db.execute(
+            select(StationSetup)
+            .where(StationSetup.station_id == station_id)
+            .order_by(StationSetup.created_at)
+        )
+        return result.scalars().all()
+
+    @staticmethod
+    async def create_station_setup(
+        db: AsyncSession,
+        station_id: UUID,
+        body: StationSetupCreate,
+    ) -> StationSetup:
+        # Verify station exists
+        st = await db.execute(select(Station).where(Station.id == station_id))
+        if not st.scalar_one_or_none():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Station not found")
+        setup = StationSetup(station_id=station_id, **body.model_dump(exclude_none=False))
+        db.add(setup)
+        await db.flush()
+        return setup
+
+    @staticmethod
+    async def update_station_setup(
+        db: AsyncSession,
+        setup_id: UUID,
+        body: StationSetupUpdate,
+    ) -> StationSetup:
+        result = await db.execute(select(StationSetup).where(StationSetup.id == setup_id))
+        setup = result.scalar_one_or_none()
+        if not setup:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Setup not found")
+        for field, value in body.model_dump(exclude_unset=True).items():
+            setattr(setup, field, value)
+        await db.flush()
+        return setup
+
+    @staticmethod
+    async def delete_station_setup(
+        db: AsyncSession,
+        setup_id: UUID,
+    ) -> None:
+        result = await db.execute(select(StationSetup).where(StationSetup.id == setup_id))
+        setup = result.scalar_one_or_none()
+        if not setup:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Setup not found")
+        await db.delete(setup)
+        await db.flush()

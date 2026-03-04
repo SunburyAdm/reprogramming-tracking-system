@@ -11,11 +11,21 @@ export interface User {
   created_at?: string;
 }
 
+export interface StationSetup {
+  id: string;
+  station_id: string;
+  name: string;
+  attributes: Record<string, string>;
+  created_at: string;
+  updated_at?: string;
+}
+
 export interface Station {
   id: string;
   session_id: string;
   name: string;
   members: User[];
+  setups: StationSetup[];
 }
 
 export interface Session {

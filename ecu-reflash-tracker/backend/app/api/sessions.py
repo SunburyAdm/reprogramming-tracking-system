@@ -9,6 +9,7 @@ from app.models import User
 from app.schemas import (
     SessionCreate, SessionUpdate, SessionResponse,
     StationCreate, StationResponse, StationMembersUpdate,
+    StationSetupCreate, StationSetupUpdate, StationSetupResponse,
 )
 from app.services.session_service import SessionService
 from app.core.ws import emit_event
@@ -184,3 +185,60 @@ async def update_station_members(
     await db.commit()
     await emit_event("SESSION_UPDATED", {"session_id": str(session_id)})
     return station
+
+# ─────────────────────────────────────── Station Setups ───────────────────────────────────────
+
+@router.get("/{session_id}/stations/{station_id}/setups", response_model=List[StationSetupResponse])
+async def get_setups(
+    session_id: UUID,
+    station_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    return await SessionService.get_station_setups(db, station_id)
+
+
+@router.post("/{session_id}/stations/{station_id}/setups", response_model=StationSetupResponse, status_code=201)
+async def create_setup(
+    session_id: UUID,
+    station_id: UUID,
+    body: StationSetupCreate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if user.role.value not in ("admin", "tech"):
+        raise HTTPException(status_code=403, detail="Admin or tech only")
+    setup = await SessionService.create_station_setup(db, station_id, body)
+    await db.commit()
+    await emit_event("SESSION_UPDATED", {"session_id": str(session_id)})
+    return setup
+
+
+@router.patch("/{session_id}/stations/{station_id}/setups/{setup_id}", response_model=StationSetupResponse)
+async def update_setup(
+    session_id: UUID,
+    station_id: UUID,
+    setup_id: UUID,
+    body: StationSetupUpdate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if user.role.value not in ("admin", "tech"):
+        raise HTTPException(status_code=403, detail="Admin or tech only")
+    setup = await SessionService.update_station_setup(db, setup_id, body)
+    await db.commit()
+    return setup
+
+
+@router.delete("/{session_id}/stations/{station_id}/setups/{setup_id}", status_code=204)
+async def delete_setup(
+    session_id: UUID,
+    station_id: UUID,
+    setup_id: UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if user.role.value not in ("admin", "tech"):
+        raise HTTPException(status_code=403, detail="Admin or tech only")
+    await SessionService.delete_station_setup(db, setup_id)
+    await db.commit()
