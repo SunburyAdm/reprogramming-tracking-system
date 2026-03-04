@@ -123,3 +123,17 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
   setCurrentBox: (currentBox) => set({ currentBox }),
   setEcus: (ecus) => set({ ecus }),
 }));
+
+// ── User preferences (persisted in localStorage) ─────────────────────────────
+interface PrefsState {
+  confirmReflash: boolean;
+  setConfirmReflash: (v: boolean) => void;
+}
+
+export const usePrefsStore = create<PrefsState>((set) => ({
+  confirmReflash: localStorage.getItem('pref-confirmReflash') !== 'false',
+  setConfirmReflash: (v) => {
+    localStorage.setItem('pref-confirmReflash', String(v));
+    set({ confirmReflash: v });
+  },
+}));

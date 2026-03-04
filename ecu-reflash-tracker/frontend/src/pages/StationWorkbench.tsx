@@ -4,9 +4,10 @@ import {
   getStations, listBoxes, claimBox, scanEcu,
   freezeBox, startFlash, finishFlash, startRework, getBoxEcus, getBox, deleteEcu, markEcuScratch,
 } from '../services/api';
-import { useAuthStore, useWorkbenchStore, ECUContext, Station, Box } from '../store/index';
+import { useAuthStore, useWorkbenchStore, usePrefsStore, ECUContext, Station, Box } from '../store/index';
 import EcuDetailModal from '../components/EcuDetailModal';
 import ProfileModal, { AvatarCircle } from '../components/ProfileModal';
+import { useT } from '../i18n';
 
 /** Live elapsed-time display for an in-progress flash. */
 function FlashTimer({ startedAt }: { startedAt: string | null }) {
@@ -69,6 +70,12 @@ export default function StationWorkbench() {
   const dismissedBlockedRef = useRef<string | null>(null);
   // Prevents polling from auto-navigating away when the tech is reviewing a just-completed flash table
   const awaitingBoxClose = useRef(false);
+
+  // Confirmation dialog for Re-flash
+  const [reflashTarget, setReflashTarget] = useState<ECUContext | null>(null);
+  const [pendingFlash, setPendingFlash] = useState<Set<string>>(new Set());
+  const { confirmReflash } = usePrefsStore();
+  const t = useT();
 
   const notify = (text: string, ok = true) => {
     if (msgTimer.current) clearTimeout(msgTimer.current);
@@ -231,6 +238,8 @@ export default function StationWorkbench() {
 
   const handleStartFlash = async (ecu: ECUContext) => {
     if (!sessionId || !currentBox) return;
+    if (pendingFlash.has(ecu.id)) return;           // prevent duplicate clicks
+    setPendingFlash(p => new Set(p).add(ecu.id));
     try {
       await startFlash(sessionId, currentBox.id, {
         ecu_code: ecu.ecu_code,
@@ -241,6 +250,8 @@ export default function StationWorkbench() {
       notify(`Flashing ${ecu.ecu_code}…`);
     } catch (err: any) {
       notify(extractError(err, 'Error starting flash'), false);
+    } finally {
+      setPendingFlash(p => { const n = new Set(p); n.delete(ecu.id); return n; });
     }
   };
 
@@ -547,6 +558,31 @@ export default function StationWorkbench() {
                 )}
               </div>
             )}
+
+            {/* ── Pending boxes reference ───────────────────────────────────── */}
+            {allBoxes.filter(b => b.status === 'pending').length > 0 && (
+              <div style={{ marginTop: 28 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: '#6b7280', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 1 }}>
+                  ⏳ Pendientes — sin asignar ({allBoxes.filter(b => b.status === 'pending').length})
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {allBoxes.filter(b => b.status === 'pending').map(b => (
+                    <div key={b.id} style={{
+                      display: 'flex', alignItems: 'center', gap: 14,
+                      padding: '9px 14px', background: 'var(--surface2)',
+                      border: '1px solid var(--border)', borderRadius: 8,
+                    }}>
+                      <span style={{ fontSize: 14 }}>📦</span>
+                      <span style={{ fontWeight: 600, fontSize: 14 }}>{b.box_serial}</span>
+                      <span className="badge badge-pending">pending</span>
+                      {b.expected_ecu_count
+                        ? <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>{b.expected_ecu_count} ECUs esperados</span>
+                        : null}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -556,7 +592,14 @@ export default function StationWorkbench() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 20 }}>
               <button className="btn btn-ghost" style={{ fontSize: 12 }} onClick={() => { setCurrentBox(null); setEcus([]); setPhase('station-dashboard'); }}>← Back</button>
               <h2>Learning: {currentBox.box_serial}</h2>
-              <span style={{ color: 'var(--text-dim)', fontSize: 14 }}>{ecus.length} ECUs scanned</span>
+              <span style={{
+                fontSize: 15, fontWeight: 700,
+                color: currentBox.expected_ecu_count
+                  ? (ecus.length >= currentBox.expected_ecu_count ? 'var(--success)' : '#f59e0b')
+                  : 'var(--text-dim)',
+              }}>
+                {ecus.length}{currentBox.expected_ecu_count ? `/${currentBox.expected_ecu_count}` : ''} ECUs
+              </span>
               <span className="navbar-spacer" />
               <button
                 className="btn btn-success"
@@ -580,6 +623,51 @@ export default function StationWorkbench() {
               />
               <button type="submit" className="btn btn-primary">Add</button>
             </form>
+
+            {/* ── ECU progress bar ─────────────────────────────────────────── */}
+            {currentBox.expected_ecu_count != null && currentBox.expected_ecu_count > 0 && (
+              <div style={{ marginBottom: 18 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-dim)', marginBottom: 5 }}>
+                  <span>Progreso de escaneo</span>
+                  <span style={{ fontWeight: 700, color: ecus.length >= currentBox.expected_ecu_count ? 'var(--success)' : '#f59e0b' }}>
+                    {ecus.length} / {currentBox.expected_ecu_count}
+                  </span>
+                </div>
+                <div style={{ height: 6, background: 'var(--surface2)', borderRadius: 999, overflow: 'hidden' }}>
+                  <div style={{
+                    height: '100%', borderRadius: 999, transition: 'width .3s ease',
+                    background: ecus.length >= currentBox.expected_ecu_count ? 'var(--success)' : '#f59e0b',
+                    width: `${Math.min(100, (ecus.length / currentBox.expected_ecu_count) * 100)}%`,
+                  }} />
+                </div>
+              </div>
+            )}
+
+            {/* ── Pending boxes reference ──────────────────────────────────── */}
+            {allBoxes.filter(b => b.status === 'pending').length > 0 && (
+              <div style={{
+                marginBottom: 20,
+                padding: '10px 14px',
+                background: 'var(--surface2)',
+                border: '1px solid var(--border)',
+                borderRadius: 8,
+              }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#6b7280', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 1 }}>
+                  ⏳ Cajas pendientes en sesión ({allBoxes.filter(b => b.status === 'pending').length})
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {allBoxes.filter(b => b.status === 'pending').map(b => (
+                    <span key={b.id} style={{
+                      background: 'var(--surface)', border: '1px solid var(--border)',
+                      borderRadius: 6, padding: '3px 10px', fontSize: 12, color: 'var(--text-dim)',
+                    }}>
+                      📦 {b.box_serial}{b.expected_ecu_count ? ` (${b.expected_ecu_count})` : ''}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <table className="table">
               <thead>
                 <tr><th>#</th><th>ECU Code</th><th>Status</th><th></th></tr>
@@ -746,9 +834,10 @@ export default function StationWorkbench() {
                         <button
                           className="btn btn-primary"
                           style={{ padding: '4px 12px', fontSize: 12 }}
+                          disabled={pendingFlash.has(e.id)}
                           onClick={() => handleStartFlash(e)}
                         >
-                          Start Flash
+                          {pendingFlash.has(e.id) ? '…' : 'Start Flash'}
                         </button>
                       )}
                       {e.status === 'flashing' && (
@@ -758,6 +847,22 @@ export default function StationWorkbench() {
                           onClick={() => handleFinishFlash(e)}
                         >
                           Finish
+                        </button>
+                      )}
+                      {e.status === 'success' && (
+                        <button
+                          className="btn btn-ghost"
+                          style={{ padding: '4px 12px', fontSize: 12, color: 'var(--warn)', border: '1px solid var(--warn)' }}
+                          title="Re-flash this ECU — use if Finish was pressed by mistake"
+                          onClick={() => {
+                            if (confirmReflash) {
+                              setReflashTarget(e);
+                            } else {
+                              handleRework(e);
+                            }
+                          }}
+                        >
+                          ↺ Re-flash
                         </button>
                       )}
                       {e.status === 'failed' && (
@@ -784,9 +889,10 @@ export default function StationWorkbench() {
                           <button
                             className="btn btn-primary"
                             style={{ padding: '4px 12px', fontSize: 12 }}
+                            disabled={pendingFlash.has(e.id)}
                             onClick={() => handleStartFlash(e)}
                           >
-                            Re-Flash
+                            {pendingFlash.has(e.id) ? '…' : 'Re-Flash'}
                           </button>
                           <button
                             className="btn btn-ghost"
@@ -854,6 +960,45 @@ export default function StationWorkbench() {
       )}
       {showProfile && (
         <ProfileModal onClose={() => setShowProfile(false)} />
+      )}
+
+      {/* ── Re-flash confirmation dialog ─────────────────────────────── */}
+      {reflashTarget && (
+        <div className="modal-overlay" onClick={() => setReflashTarget(null)}>
+          <div
+            className="modal"
+            onClick={e => e.stopPropagation()}
+            style={{ maxWidth: 400, width: '100%', padding: 28 }}
+          >
+            <div style={{ fontSize: 32, textAlign: 'center', marginBottom: 12 }}>↺</div>
+            <h2 style={{ textAlign: 'center', fontSize: 18, marginBottom: 8 }}>
+              {t.reflashConfirmTitle}
+            </h2>
+            <p style={{ textAlign: 'center', color: 'var(--text-dim)', fontSize: 14, marginBottom: 24, lineHeight: 1.5 }}>
+              {t.reflashConfirmBody(reflashTarget.ecu_code)}
+            </p>
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
+              <button
+                className="btn btn-ghost"
+                style={{ padding: '8px 20px' }}
+                onClick={() => setReflashTarget(null)}
+              >
+                {t.cancel}
+              </button>
+              <button
+                className="btn btn-warn"
+                style={{ padding: '8px 20px' }}
+                onClick={() => {
+                  const ecu = reflashTarget;
+                  setReflashTarget(null);
+                  handleRework(ecu);
+                }}
+              >
+                {t.reflashConfirmOk}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </>
   );

@@ -4,6 +4,7 @@ import { useAuthStore, User } from '../store/index';
 import { format } from 'date-fns';
 import { es as esLocale, enUS } from 'date-fns/locale';
 import { useT, useLangStore } from '../i18n';
+import { usePrefsStore } from '../store';
 
 interface Props {
   onClose: () => void;
@@ -88,6 +89,7 @@ export { AvatarCircle, getInitials, pickColor };
 export default function ProfileModal({ onClose }: Props) {
   const { user, setUser } = useAuthStore();
   const { lang, setLang } = useLangStore();
+  const { confirmReflash, setConfirmReflash } = usePrefsStore();
   const t = useT();
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -387,6 +389,34 @@ export default function ProfileModal({ onClose }: Props) {
                 </button>
               </div>
             </form>
+          </section>
+
+          {/* ── Workbench Preferences ──────────────────────────────── */}
+          <section style={{ borderTop: '1px solid var(--border)', paddingTop: 20 }}>
+            <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 14,
+              color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+              {t.prefWorkbench}
+            </h3>
+            <label style={{
+              display: 'flex', alignItems: 'flex-start', gap: 12,
+              cursor: 'pointer', padding: '10px 12px', borderRadius: 8,
+              background: 'var(--surface2)', border: '1px solid var(--border)',
+            }}>
+              <input
+                type="checkbox"
+                checked={confirmReflash}
+                onChange={e => setConfirmReflash(e.target.checked)}
+                style={{ marginTop: 3, width: 16, height: 16, cursor: 'pointer', accentColor: 'var(--primary)' }}
+              />
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>
+                  {t.prefConfirmReflash}
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 2 }}>
+                  {t.prefConfirmReflashDesc}
+                </div>
+              </div>
+            </label>
           </section>
 
           {/* ── Language ──────────────────────────────────────────────── */}

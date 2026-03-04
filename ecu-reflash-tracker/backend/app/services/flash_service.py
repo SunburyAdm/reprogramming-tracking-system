@@ -78,6 +78,24 @@ class FlashService:
         now = datetime.utcnow()
         attempt_no = (ecu_context.attempts or 0) + 1
 
+        # Abandon any stale in_progress attempts that may have been left behind
+        # by a previous server crash or failed finish_flash call.
+        stale_result = await db.execute(
+            select(FlashAttempt).where(
+                and_(
+                    FlashAttempt.ecu_context_id == ecu_context.id,
+                    FlashAttempt.result == "in_progress",
+                )
+            )
+        )
+        stale_attempts = stale_result.scalars().all()
+        for stale in stale_attempts:
+            stale.result = "failed"
+            stale.ended_at = now
+            stale.notes = (stale.notes or "") + " [auto-closed: new flash attempt started]"
+        if stale_attempts:
+            await db.flush()
+
         flash_attempt = FlashAttempt(
             session_id=session_id,
             box_id=box_id,
@@ -166,16 +184,22 @@ class FlashService:
                 ),
             )
 
-        # Find the in-progress flash attempt
+        # Find the in-progress flash attempt.
+        # Use order_by + limit(1) as a safety guard: if somehow more than one
+        # in_progress row exists (e.g. left by a previous server crash), pick
+        # the most-recently-started one instead of crashing with MultipleResultsFound.
         attempt_result = await db.execute(
-            select(FlashAttempt).where(
+            select(FlashAttempt)
+            .where(
                 and_(
                     FlashAttempt.ecu_context_id == ecu_context.id,
                     FlashAttempt.result == "in_progress",
                 )
             )
+            .order_by(FlashAttempt.started_at.desc())
+            .limit(1)
         )
-        attempt = attempt_result.scalar_one_or_none()
+        attempt = attempt_result.scalars().first()
         if not attempt:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -248,27 +272,36 @@ class FlashService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="ECU not found in this box/session",
             )
-        if ecu_context.status != "failed":
+        if ecu_context.status not in ("failed", "success"):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=(
-                    f"ECU must be in 'failed' status to start rework. "
+                    f"ECU must be in 'failed' or 'success' status to start rework/re-flash. "
                     f"Current status: '{ecu_context.status}'."
                 ),
             )
 
+        coming_from_success = ecu_context.status == "success"
         ecu_context.status = "rework_pending"
         ecu_context.version += 1
         await db.flush()
 
-        # Box stays 'blocked' — _check_box_completion is not called here on purpose;
-        # the box will be re-evaluated only after the rework flash attempt completes.
+        # If the ECU was successful and the box is already completed, revert it
+        # back to in_progress so the tech can re-flash without breaking the flow.
+        if coming_from_success:
+            box_result = await db.execute(select(Box).where(Box.id == box_id))
+            box = box_result.scalar_one_or_none()
+            if box and box.status == "completed":
+                box.status = "in_progress"
+                box.completed_at = None
+                await db.flush()
+
         history = History(
             session_id=session_id,
             box_id=box_id,
             ecu_context_id=ecu_context.id,
             user_id=user.id,
-            action="REWORK_STARTED",
+            action="REFLASH_REQUESTED" if coming_from_success else "REWORK_STARTED",
             data={"ecu_code": ecu_code},
         )
         db.add(history)

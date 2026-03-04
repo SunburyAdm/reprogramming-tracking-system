@@ -1,4 +1,4 @@
-version: '3.8'
+﻿version: '3.8'
 
 services:
   postgres:
@@ -54,7 +54,7 @@ services:
       API_HOST: 0.0.0.0
       API_PORT: 8000
       ENVIRONMENT: development
-      FRONTEND_URL: http://localhost:3000
+      FRONTEND_URL: http://192.168.1.27:3000
     ports:
       - "8000:8000"
     depends_on:
@@ -76,7 +76,7 @@ services:
       dockerfile: Dockerfile
     container_name: ecu-frontend
     environment:
-      VITE_API_URL: http://localhost:8000
+      VITE_API_URL: http://192.168.1.27:8000
     ports:
       - "3000:3000"
     depends_on:

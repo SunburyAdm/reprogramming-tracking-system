@@ -186,6 +186,15 @@ const T = {
     minChars: 'min. 6 characters',
     repeatPwd: 'repeat password',
 
+    // ── Workbench preferences
+    prefWorkbench: 'Workbench Preferences',
+    prefConfirmReflash: 'Confirm before Re-flash',
+    prefConfirmReflashDesc: 'Show a confirmation popup when the ↺ Re-flash button is pressed.',
+    reflashConfirmTitle: 'Re-flash ECU?',
+    reflashConfirmBody: (code: string) =>
+      `Are you sure you want to re-flash ${code}?\nThis will undo the current result and put the ECU back into the queue.`,
+    reflashConfirmOk: 'Yes, Re-flash',
+
     // ── Role labels
     roleAdmin: 'Admin',
     roleTech: 'Technician',
@@ -380,6 +389,15 @@ const T = {
     joinedSince: 'desde',
     minChars: 'mín. 6 caracteres',
     repeatPwd: 'repite la contraseña',
+
+    // ── Workbench preferences
+    prefWorkbench: 'Preferencias del Workbench',
+    prefConfirmReflash: 'Confirmar antes de Re-flashear',
+    prefConfirmReflashDesc: 'Muestra un popup de confirmación al presionar el botón ↺ Re-flash.',
+    reflashConfirmTitle: '¿Re-flashear ECU?',
+    reflashConfirmBody: (code: string) =>
+      `¿Seguro que deseas re-flashear ${code}?\nEsto deshará el resultado actual y regresará la ECU a la cola.`,
+    reflashConfirmOk: 'Sí, Re-flashear',
 
     // ── Role labels
     roleAdmin: 'Admin',
