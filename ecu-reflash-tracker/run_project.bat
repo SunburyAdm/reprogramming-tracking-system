@@ -48,8 +48,9 @@ for /f "tokens=1,* delims==" %%A in ('findstr "^DATABASE_URL=" .env') do set DBU
 
 echo Using database: "%DBURL%"
 
-echo %DBURL% | findstr /b /i "sqlite" >nul
-if %ERRORLEVEL%==0 (
+REM simple prefix comparison instead of piping
+set "PREFIX=!DBURL:~0,6!"
+if /I "%PREFIX%"=="sqlite" (
     echo ⚠ Using SQLite database (local file).
     echo    To switch to PostgreSQL, update DATABASE_URL in .env accordingly.
     echo    Example: postgresql://user:pass@localhost:5432/ecu_db
